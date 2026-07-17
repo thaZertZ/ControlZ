@@ -5,9 +5,9 @@
 #include <vector>
 #include <cstdint>
 #include <algorithm>
-#define _WIN32_WINNT 0x0A00 // Fix for Windows 10 and 11
 #define WIN32_LEAN_AND_MEAN
-#include "../3rd-party/httplib.h"
+#define _WIN32_WINNT 0x0A00 // Fix for Windows 10 and 11
+#include "../../3rd-party/httplib.h"
 
 enum class ClientColor : std::uint8_t {
     Red, Green, Yellow, Blue, Magenta, Cyan, White, // Normal

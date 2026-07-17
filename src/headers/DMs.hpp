@@ -1,4 +1,5 @@
-#pragma once
+#ifndef CONTROLZ_DMS_HPP
+#define CONTROLZ_DMS_HPP
 
 #include <cstdint>
 #include <string>
@@ -627,3 +628,5 @@ inline void EncryptDecrypt(std::string& Data, std::uint64_t Key) {
 }
 
 } // namespace ControlZ
+
+#endif // CONTROLZ_DMS_HPP

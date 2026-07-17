@@ -1,4 +1,5 @@
-#pragma once
+#ifndef CONTROLZ_ENVELOPE_HPP
+#define CONTROLZ_ENVELOPE_HPP
 
 #include <string>
 #include <cstring>
@@ -500,3 +501,5 @@ GetDMsAttachmentReplyResponse GetDMsAttachmentReply(const DMsAttachment& Attachm
 }
 
 } // namespace ControlZ
+
+#endif // CONTROLZ_ENVELOPE_HPP

@@ -3,8 +3,9 @@
 #include <thread>
 #include <vector>
 #include <mutex>
+#define WIN32_LEAN_AND_MEAN
 #define _WIN32_WINNT 0x0A00 // Fix for Windows 10 and 11
-#include "../3rd-party/httplib.h"
+#include "../../3rd-party/httplib.h"
 
 std::string GetColorStr(std::uint8_t Color) {
     switch (Color) {

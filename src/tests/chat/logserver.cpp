@@ -1,8 +1,8 @@
 #include <iostream>
 #include <string>
-#define _WIN32_WINNT 0x0A00
 #define WIN32_LEAN_AND_MEAN
-#include "../3rd-party/httplib.h"
+#define _WIN32_WINNT 0x0A00
+#include "../../3rd-party/httplib.h"
 
 std::mutex StdoutMtx;
 
