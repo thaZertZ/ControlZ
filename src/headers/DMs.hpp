@@ -85,7 +85,7 @@ public:
 class DMsHeader {
 public:
 
-    char Magic[2]; // Magic bytes `"DM"`
+    char Magic[2]; // Magic bytes `"DM"` (should we have a zero-initialization with `{}`?)
     std::uint8_t Version = 0; // Format version: `1` = backward-linked-list, `2` = forward-linked-list
     std::uint8_t Padding = 0; // Padding null byte, must be 0
     std::uint16_t NodeCount = 0; // The number of nodes contained in a file, must be non-zero
@@ -207,7 +207,7 @@ inline void EncryptDecrypt(std::string& Data, std::uint64_t Key) {
 [[nodiscard]] CreateDMsFileStatus CreateDMsFile(
         const std::string& Path, std::string& Data, const std::uint64_t& Seed, const std::string& ContextStr,
         const std::uint8_t Version) {
-    
+
     // NOTE: maybe avoid taking Data by reference even though it's efficient, just so that the caller
     //       doesn't get encrypted data after returning
 
@@ -261,7 +261,7 @@ inline void EncryptDecrypt(std::string& Data, std::uint64_t Key) {
     if (!File) return AppendDMsFileStatus::FileFatalError;
     File.exceptions(std::ios::badbit | std::ios::failbit);
     DMsHeader Header;
-    
+        
     try {
         // Calculate filesize in bytes with error checking
         std::streampos TempSize = File.tellg();
@@ -487,7 +487,7 @@ inline void EncryptDecrypt(std::string& Data, std::uint64_t Key) {
                         continue;
                     }
 
-                    // There should be no CurrentNode.NexNodeOffset == 0 special case
+                    // There should be no CurrentNode.NextNodeOffset == 0 special case
                     DataSize = PrevNodeAddr - File.tellg();
 
                     Response.Data[i - StartNode].resize(DataSize);
