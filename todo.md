@@ -1,35 +1,22 @@
 
 # Todo
 
+## Global:
+
+Adapt class and struct APIs to be more like Rust's with `from_` and `to_` factory
+functions.
+
 ## `src/headers/Envelope.hpp`:
 
-- Try to change every timestamp field from a 32bit integer to a 64bit
-  integer representing milliseconds (create a new dev branch).
+- Add comments for documentation
 
-## `src/headers/DMs.hpp`:
+## `src/headers/Mappings.hpp`:
 
-- Try to adapt to the changes made to `Envelope.hpp` (on the same branch).
-
-## `src/headers/Util.hpp`:
-
-- Make conversion functions for from and to Base32
-- Make a utility function to derive the custom timestamp (64bit integer)
-  for the Base32 representation of milliseconds (with epoch at
-  `00:00:00 Jan 2026 UTC`, probably locales needed).
-
-## `docs/`:
-
-- Create documentation for the already existing APIs (`Envelope.hpp`,
-  `DMs.hpp`).
+- Add a version of `append_map_file()` taking in a `const std::vector<Mapping>&`
+- Add comments for documentation
 
 ## `docs/WebSocket.md`:
 
 - Specify the use of `Ack` and `Nack` packets in response to other types of packets
 - Change the `Ack` and `Nack` specification according to the needs of other packet
   types with one or more bytes specifying an enum (class) value for the response.
-
-## `src/headers/UserSession.hpp`:
-
-- Create this header
-- Improve the old API and binary format
-- Provide serialization functions for `InfoUserResponse` and `InfoChatResponse` packets

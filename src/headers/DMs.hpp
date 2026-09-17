@@ -1,631 +1,640 @@
 #ifndef CONTROLZ_DMS_HPP
 #define CONTROLZ_DMS_HPP
 
-#include <cstdint>
+#include "Common.hpp"
+#include <expected>
+#include <optional>
 #include <string>
 #include <fstream>
-#include <random>
-#include <chrono>
-#include <vector>
-#include <algorithm> // std::reverse()
+#include <filesystem>
+
+namespace std {
+
+namespace fs = ::std::filesystem;
+
+} // namespace std
 
 namespace ControlZ {
 
-// Maybe make the header sizes either compile-time constants or even macros
+/// @brief Derive a context string from a variadic number of strings by concatenating
+///        them and separating them with a non-breaking space
+/// @tparam ...Args A variadic number of `std::string`s
+/// @param x The first string
+/// @param ...args All of the others
+/// @return The concatenated strings
+template <typename... Args>
+requires (AllSameAs<std::string, Args...>)
+inline constexpr std::string derive_context_string(const std::string& x, const Args&... args) {
+    if constexpr (sizeof...(args) == 0) {
+        return x;
+    } else {
+        return x + (char)255 + derive_context_string(args...);
+    }
+}
+
+/// @brief Scramble the bits of a given number
+/// @param x The number to scramble
+/// @return The scrambled number
+inline constexpr std::uint64_t avalanche_scramble(std::uint64_t x) noexcept {
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    x = x ^ (x >> 31);
+    return x;
+}
+
+/// @brief Derive an encryption key from a randomly-generated seed and a context string
+/// @param seed The seed
+/// @param context_str The context string
+/// @return The generated key
+inline constexpr std::uint64_t derive_key(std::uint64_t seed, const std::string& context_str) noexcept {
+    for (char c : context_str) {
+        seed ^= static_cast<std::uint64_t>(c);
+        seed = avalanche_scramble(seed);
+    }
+
+    return avalanche_scramble(seed);
+}
+
+/// @brief Perform symmetric encryption to a data out-parameter with a key
+/// @param data The data out-parameter (will be modified when this function returns)
+/// @param key The encryption key used
+inline constexpr void encrypt_decrypt(std::string& data, std::uint64_t key) noexcept {
+    for (char& c : data) {
+        key = avalanche_scramble(key);
+        c ^= static_cast<char>(key >> 56);
+    }
+}
+
+/// @brief A scoped enum used when verifying the contents of a `DMsHeader`
+CONTROLZ_MAKE_SCOPED_ENUM (
+    DMsHeaderVerifyError, // Type name
+    std::uint8_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
+
+    // Enum values
+    OK             = 0,
+    InvalidMagic   = 1 << 0,
+    InvalidVersion = 1 << 1,
+    InvalidConfig  = 1 << 2
+)
+
 #pragma pack(push, 1)
 
-/// @brief Error status (`std::uint8_t`) returned when creating a DMs file
-/// @note `FileFatalError` is `std::ios::badbit`, `FileOtherFail` is `std::ios::failbit` and
-///       `Exception` is a non-rethrown exception
-enum class CreateDMsFileStatus : std::uint8_t {
-    OK, InvalidVersion, FileFatalError, FileOtherFail, Exception
+/// @brief The file header of the DMs binary format
+struct DMsHeader {
+    /// @brief `"DM"` magic bytes
+    const char magic[2] = {'D', 'M'};
+    /// @brief Version number
+    std::uint8_t version = 0;
+    /// @brief Configuration flags:
+    /// ```txt
+    /// 7 6 5 4 3 2 1 0
+    /// ---------------
+    /// x x x x x x l k
+    ///
+    /// k  :  Zstd compression flag (not yet implemented)
+    /// l  :  Linking type (0 = forward and 1 = backward)
+    /// x  :  Reserved for future use
+    /// ```
+    std::uint8_t config = 0;
+    /// @brief The number of nodes contained in this file
+    std::uint16_t node_count = 0;
+    /// @brief The absolute byte address of the last node
+    std::uint64_t last_node_addr = 0;
+
+    /// @brief Verify the contents of a header object
+    /// @return A status bitmask
+    inline constexpr DMsHeaderVerifyError verify() const noexcept {
+
+        DMsHeaderVerifyError errors;
+
+        if (magic[0] != 'D' || magic[1] != 'M') errors |= DMsHeaderVerifyError::InvalidMagic;
+        if (version > 0) errors |= DMsHeaderVerifyError::InvalidVersion;
+
+        if ((config & 0b11111100) != 0) errors |= DMsHeaderVerifyError::InvalidConfig;
+
+        return errors;
+    }
 };
 
-/// @brief Error status (`std::uint8_t`) returned when decrypting a DMs file
-/// @note `FileFatalError` is `std::ios::badbit`, `FileOtherFail` is `std::ios::failbit` and
-///       `Exception` is a non-rethrown exception
-enum class DecryptDMsFileStatus : std::uint8_t {
-    OK,
-    FileTooSmall, InvalidVersion, InvalidMagic, NonZeroPadding, ZeroNodeCount, InvalidLastNodeAddr,
-    InvalidStartNode, InvalidNodeRange, // Used for checking StartNode and MaxNodes
-    FileFatalError, FileOtherFail, Exception
-};
-
-/// @brief Error status (`std::uint8_t`) returned when appending to a DMs file
-/// @note `FileFatalError` is `std::ios::badbit`, `FileOtherFail` is `std::ios::failbit` and
-///       `Exception` is a non-rethrown exception
-enum class AppendDMsFileStatus : std::uint8_t {
-    OK,
-    FileTooSmall, InvalidVersion, InvalidMagic, NonZeroPadding, ZeroNodeCount, InvalidLastNodeAddr,
-    FileFatalError, FileOtherFail, Exception
-};
-
-/// @brief Error status (`std::uint8_t`) returned when converting a DMs file
-/// @note `FileFatalError` is `std::ios::badbit`, `FileOtherFail` is `std::ios::failbit` and
-///       `Exception` is a non-rethrown exception
-/// @note This `enum class` has the same values as `AppendDMsFileStatus`, so it could be replaced
-///            by it in future changes
-enum class ConvertDMsFileStatus : std::uint8_t {
-    OK,
-    FileTooSmall, InvalidVersion, InvalidMagic, NonZeroPadding, ZeroNodeCount, InvalidLastNodeAddr,
-    FileFatalError, FileOtherFail, Exception
-};
-
-/// @brief Error status returned by the `verify()` method of `DMsHeader`
-enum class DMsHeaderVerifyStatus : std::uint8_t {
-    OK, InvalidMagic, NonZeroPadding, ZeroNodeCount, InvalidLastNodeAddr
-};
-
-/// @brief `struct` returned by `DecryptDMsFile()` containing the decrypted file's format version,
-///        the `ErrorStatus` (`DecryptDMsFileStatus`) of the decryption process, and a vector of
-///        un-deserialized message data as `std::string`s
-struct DecryptDMsFileResponse {
-    std::uint8_t Version = 0; // If ErrorStatus != DecryptDMsFileStatus::OK then Version = 0, otherwise either 1 or 2
-    DecryptDMsFileStatus ErrorStatus = DecryptDMsFileStatus::OK; // Error status set while decrypting
-    std::vector<std::string> Data; // Heap allocated data buffer, order determined by the protocol version
-};
-
-/// @brief `struct` that gets serialized in a DMs file containing the necessary data for decrypting the
-///        message associated with a `DMsNode`
+/// @brief A struct representing a node in a DMs file
 struct DMsNode {
-public:
-
-    std::uint32_t NextNodeOffset = 0; // The byte offset to the next node
-    std::uint64_t Seed = 0; // The seed used as part of the encryption process for this node's data
-
-    /// @brief Default constructor, used when `read()`ing from a DMs file
-    DMsNode() = default;
-    /// @brief Construct a node with a seed
-    /// @param Sd The seed used as part of the encryption process of the message associated with this node
-    DMsNode(const std::uint64_t& Sd) : Seed(Sd) {}
-
-};
-
-/// @brief More complex `class` used once per DMs file, containing metadata and format data
-class DMsHeader {
-public:
-
-    char Magic[2]; // Magic bytes `"DM"` (should we have a zero-initialization with `{}`?)
-    std::uint8_t Version = 0; // Format version: `1` = backward-linked-list, `2` = forward-linked-list
-    std::uint8_t Padding = 0; // Padding null byte, must be 0
-    std::uint16_t NodeCount = 0; // The number of nodes contained in a file, must be non-zero
-    std::uint32_t LastNodeAddr = 0; // The absolute address of the last node
-    // 0 is an allowed value since it means that there are no more nodes, V1 only
-    DMsNode Node; // The first node in the file
-
-    /// @brief Default constructor, used when `read()`ing from a DMs file
-    DMsHeader() = default;
-    /// @brief Construct the header with the format version and the first node's seed
-    /// @param Ver The format version (either `1` or `2`)
-    /// @param Sd The first node's seed
-    DMsHeader(const std::uint8_t Ver, const std::uint64_t& Sd) : Version(Ver), Padding(0), LastNodeAddr(0), Node(Sd) {
-        Magic[0] = 'D';
-        Magic[1] = 'M';
-    }
-
-    DMsHeader(DMsHeader&) = delete;
-    DMsHeader(const DMsHeader&) = delete;
-    // Maybe un-delete the two move constructors
-    DMsHeader(DMsHeader&&) = delete;
-    DMsHeader(const DMsHeader&&) = delete;
-
-    /// @brief Verify a header's contents
-    /// @return `DMsHeaderVerifyStatus ErrorStatus`
-    [[nodiscard]] inline DMsHeaderVerifyStatus verify() const {
-        if (Magic[0] != 'D' || Magic[1] != 'M') return DMsHeaderVerifyStatus::InvalidMagic;
-        if (Padding != 0) return DMsHeaderVerifyStatus::NonZeroPadding;
-        if (NodeCount == 0) return DMsHeaderVerifyStatus::ZeroNodeCount;
-        if (LastNodeAddr < sizeof(DMsHeader) + 1 && LastNodeAddr != 0)
-            return DMsHeaderVerifyStatus::InvalidLastNodeAddr;
-        // This is because the two node-associated value can't mismatch:
-        // if NodeCount is 1, LastNodeAddr must be 0 since there is only the first node
-        // This situation is also safe in V2 since there is a special `NodeCount == 1` case
-        if (LastNodeAddr == 0 && NodeCount == 0) return DMsHeaderVerifyStatus::InvalidLastNodeAddr;
-        return DMsHeaderVerifyStatus::OK;
-    }
-
+    /// @brief The seed used in the encryption process of the contained data
+    std::uint64_t seed = 0;
+    /// @brief The relative byte offset to the next node according to the
+    ///        linking type specified in the file header (with `linking type == 1`
+    ///        this becomes `prev_node_offset`)
+    std::uint32_t next_node_offset = 0;
 };
 
 #pragma pack(pop)
 
-/// @brief Generate a random seed used as part of a DMs file message's encryption process
-/// @return `std::uint64_t Seed`
-/// @note When mapped and available, `std::random_device` is used, else the memory address of a variable
-///       and the current nanoseconds time are `XOR`ed
-std::uint64_t RandomSeed() {
+
+/// @brief A scoped enum returned when creating a DMs file
+CONTROLZ_MAKE_SCOPED_ENUM (
+    CreateDMsFileError, // Type name
+    std::uint8_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
+
+    // Enum values
+    OK                = 0,
+    InvalidVersion    = 1 << 0,
+    InvalidExtension  = 1 << 1,
+    FileAlreadyExists = 1 << 2,
+    FileFatal         = 1 << 3,
+    FileNonFatal      = 1 << 4,
+    Exception         = 1 << 5
+)
+
+/// @brief Create a DMs file with no nodes inside it
+/// @param path The path to the file
+/// @param version The version to create the file with (defaults to `0` and is the
+///                only valid value)
+/// @param linking_type Set to `false` if the linking type if forward and `true`
+///                     if it is backward
+/// @param compress Set to `true` to flag the file as needing to be Zstd-compressed
+/// @param force_overwrite Set to `true` if to overwrite an existing file with the
+///                        provided name
+/// @return An enum bitmask with one or more errors that occurred during the operation
+[[nodiscard]]
+CreateDMsFileError create_dms_file(const std::fs::path& path, std::uint8_t version = 0,
+        bool linking_type = false, bool compress = false, bool force_overwrite = false) noexcept {
+
+    CreateDMsFileError errors;
+
+    if (version != 0) errors |= CreateDMsFileError::InvalidVersion;
+    if (path.extension() != ".dm") errors |= CreateDMsFileError::InvalidExtension;
+
+    DMsHeader header;
+    header.node_count = 1;
+    header.config = ((linking_type ? 1 : 0) << 1) | (compress ? 1 : 0);
+
+    if (std::fs::exists(path) && !force_overwrite)
+        errors |= CreateDMsFileError::FileAlreadyExists;
+
+    if (errors != CreateDMsFileError::OK) return errors; // Return early rip -_-
+
+    std::ofstream file(path, std::ios::binary);
+    if (!file) return CreateDMsFileError::FileFatal; // Nice and easy
+    file.exceptions(std::ios::badbit | std::ios::failbit);
 
     try {
-        std::random_device Rd;
-        return (static_cast<std::uint64_t>(Rd()) << 32) | Rd();
+
+        file.seekp(std::ios::beg);
+        file.write(reinterpret_cast<char*>(&header), sizeof(header));
+
+    } catch (const std::ios::failure&) {
+
+        if (file.bad())
+            return CreateDMsFileError::FileFatal;
+        else
+            return CreateDMsFileError::FileNonFatal;
+
     } catch (...) {
-        auto Now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-        std::uint64_t MemAddr = reinterpret_cast<std::uint64_t>(&Now);
-        return static_cast<std::uint64_t>(Now) ^ (MemAddr << 16);
+        return CreateDMsFileError::Exception;
     }
 
-    return 0;
+    return CreateDMsFileError::OK;
 }
 
-/// @brief "Scramble" a `std::uint64_t`, used in dynamic encryption processes
-/// @param X The number to "scramble"
-inline void AvalancheScramble(std::uint64_t& X) {
-    X = (X ^ (X >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    X = (X ^ (X >> 27)) * 0x94d049bb133111ebULL;
-    X = X ^ (X >> 31);
-}
 
-// The two input strings MUST respectively be SenderUserID and RecipientUserID
+/// @brief A scoped enum returned when appending to a DMs file
+CONTROLZ_MAKE_SCOPED_ENUM (
+    AppendDMsFileError, // Type name
+    std::uint16_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
 
-/// @brief Generate a context string used as part of a DMs file encryption process
-/// @param StrA The sender's `UserID`
-/// @param StrB The recipient's `UserID`
-/// @return `std::string ContextStr`
-/// @note The context string is used as a constant in the encryption process, while the seed
-///       is node-independent
-inline std::string DeriveContextStr(const std::string& StrA, const std::string& StrB) {
-    return '%' + StrA + '%' + StrB + '%';
-}
+    // Enum values
+    OK                  = 0,
+    FileTooSmall        = 1 << 0,
+    InvalidMagic        = 1 << 1,
+    InvalidVersion      = 1 << 2,
+    InvalidConfig       = 1 << 3,
+    InvalidLastNodeAddr = 1 << 4,
+    MisalignedData      = 1 << 5,
+    FileDoesNotExist    = 1 << 6,
+    FileFatal           = 1 << 7,
+    FileNonFatal        = 1 << 8,
+    Exception           = 1 << 9
+)
 
-/// @brief Derive an encryption key to use in a DMs file message's encryption process
-/// @param Seed The dynamic seed for the node
-/// @param ContextStr The constant context string
-/// @return `std::uint64_t Key`
-std::uint64_t DeriveKey(const std::uint64_t& Seed, const std::string& ContextStr) {
-    // NOTE: if not taking params by reference (not recommended) avoid copying so use Seed as hash
-    //       and use `for (char& c : ContextStr)` instead
 
-    std::uint64_t Hash = Seed;
+/// @brief Append message data to a DMs file adding a new node
+/// @param path The path to the file
+/// @param data The data to write (it is copied to leave the caller with unencrypted data)
+/// @param seed The seed with which to encrypt the data
+/// @param context_str The context string used in the encryption process
+/// @return An enum bitmask with one or more errors that occurred during the operation
+[[nodiscard]]
+AppendDMsFileError append_dms_file(const std::fs::path& path, std::string data,
+        std::uint64_t seed, const std::string& context_str) noexcept {
 
-    for (char c : ContextStr) {
-        Hash ^= static_cast<std::uint64_t>(c);
-        AvalancheScramble(Hash);
-    }
+    AppendDMsFileError errors;
 
-    AvalancheScramble(Hash);
-    return Hash;
-}
+    if (data.size() % 2 != 0) return AppendDMsFileError::MisalignedData; // We want padding of 2
 
-/// @brief Encrypt or decrypt with a dynamic `XOR` loop to prevent frequency-based analysis on encrypted data
-/// @param Data The serialization-independent data to cypher
-/// @param Key The key derived from a `DeriveKey()` call
-inline void EncryptDecrypt(std::string& Data, std::uint64_t Key) {
-    for (char& c : Data) {
-        AvalancheScramble(Key);
-        c ^= static_cast<char>(Key >> 56);
-    }
-}
+    if (!std::fs::exists(path))
+        return AppendDMsFileError::FileDoesNotExist;
 
-/// @brief Create a new DMs file
-/// @param Path The path for the new file
-/// @param Data The message data for the first message (serialized)
-/// @param Seed The seed used as part of the encryption process for the first message
-/// @param ContextStr The context string used as part of the encryption process for the first message
-/// @param Version The DMs format version to create the file with
-/// @return `CreateDMsFileStatus ErrorStatus`
-/// @note The version with which the file is created doesn't impact the behaviour of this function, but rather
-///       the behaviour of the `AppendDMsFile()` and `DecryptDMsFile()` functions if ever used on the new file
-[[nodiscard]] CreateDMsFileStatus CreateDMsFile(
-        const std::string& Path, std::string& Data, const std::uint64_t& Seed, const std::string& ContextStr,
-        const std::uint8_t Version) {
-
-    // NOTE: maybe avoid taking Data by reference even though it's efficient, just so that the caller
-    //       doesn't get encrypted data after returning
-
-    std::uint64_t Key = DeriveKey(Seed, ContextStr);
-    if (Version - 1 > 1) return CreateDMsFileStatus::InvalidVersion; // Can only be 1 or 2
-
-    // IMPORTANT: there is no need for a V2 version of this function since it only outputs one node
-    DMsHeader Header(Version, Seed);
-    Header.NodeCount = 1;
-
-    std::ofstream File(Path, std::ios::binary);
-    if (!File) return CreateDMsFileStatus::FileFatalError;
-    File.exceptions(std::ios::badbit | std::ios::failbit);
+    std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+    if (!file) return AppendDMsFileError::FileFatal;
+    file.exceptions(std::ios::badbit | std::ios::failbit);
 
     try {
 
-        File.seekp(std::ios::beg);
-        File.write(reinterpret_cast<char*>(&Header), sizeof(Header));
-        EncryptDecrypt(Data, Key);
-        File.write(Data.data(), Data.size());
-        File.close();
-        return CreateDMsFileStatus::OK;
+        std::uint64_t filesize = std::fs::file_size(path);
+        if (filesize <= sizeof(DMsHeader))
+            return AppendDMsFileError::FileTooSmall;
 
-    } catch (const std::ios_base::failure& E) {
-        if (File.bad()) {
-            File.close();
-            return CreateDMsFileStatus::FileFatalError;
-        } else {
-            File.close();
-            return CreateDMsFileStatus::FileOtherFail;
-        }
-    } catch (...) {
-        File.close();
-        return CreateDMsFileStatus::Exception;
-    }
-}
+        DMsHeader header;
+        file.read(reinterpret_cast<char*>(&header), sizeof(header));
 
-// REMOVED DecryptDMsFileEz
+        DMsHeaderVerifyError status = header.verify();
+        if (status & DMsHeaderVerifyError::InvalidMagic) errors |= AppendDMsFileError::InvalidMagic;
+        if (status & DMsHeaderVerifyError::InvalidVersion) errors |= AppendDMsFileError::InvalidVersion;
+        if (status & DMsHeaderVerifyError::InvalidConfig) errors |= AppendDMsFileError::InvalidConfig;
 
-/// @brief Append a message to an existing DMs file
-/// @param Path The path to the file
-/// @param Data The message data to append (after serialization)
-/// @param Seed The seed used as part of the encryption process for the message
-/// @param ContextStr The context string used as part og the encryption process for the message
-/// @return `AppendDMsFileStatus ErrorStatus`
-/// @note The returned `AppendDMsFileStatus` has the same values as `DecryptDMsFileStatus`
-[[nodiscard]] AppendDMsFileStatus AppendDMsFile(
-    const std::string& Path, std::string& Data, const std::uint64_t& Seed, const std::string& ContextStr) {
+        if (errors) return errors;
 
-    std::fstream File(Path, std::ios::out | std::ios::in | std::ios::binary | std::ios::ate);
-    if (!File) return AppendDMsFileStatus::FileFatalError;
-    File.exceptions(std::ios::badbit | std::ios::failbit);
-    DMsHeader Header;
-        
-    try {
-        // Calculate filesize in bytes with error checking
-        std::streampos TempSize = File.tellg();
+        bool linking_type = ((header.config & 0b00000010) >> 1) != 0;
+        if (!linking_type) { // Forward linked
 
-        if (TempSize == std::streampos(-1)) return AppendDMsFileStatus::FileOtherFail;
-        std::uint64_t ByteSize = static_cast<std::uint64_t>(TempSize);
-        // The `+ 1` is added because there can be a header but there must also be data
+            if (header.node_count == 1) { // Special case
+                DMsNode first_node;
+                file.read(reinterpret_cast<char*>(&first_node), sizeof(first_node));
+                first_node.next_node_offset = filesize - sizeof(header);
 
-        if (ByteSize < sizeof(Header) + 1) return AppendDMsFileStatus::FileTooSmall;
-
-        File.seekg(0, std::ios::beg); // Reset cursor position
-
-        File.read(reinterpret_cast<char*>(&Header), sizeof(Header));
-        switch (Header.verify()) { // Finally verify the header integrity
-            case DMsHeaderVerifyStatus::InvalidMagic:
-                return AppendDMsFileStatus::InvalidMagic;
-            case DMsHeaderVerifyStatus::NonZeroPadding:
-                return AppendDMsFileStatus::NonZeroPadding;
-            case DMsHeaderVerifyStatus::ZeroNodeCount:
-                return AppendDMsFileStatus::ZeroNodeCount;
-            case DMsHeaderVerifyStatus::InvalidLastNodeAddr:
-                return AppendDMsFileStatus::InvalidLastNodeAddr;
-        }
-        // The version check is done externally because technically the version could even reach 255
-        // Check for versions 1 or 2 in one operation
-        if (Header.Version - 1 > 1) return AppendDMsFileStatus::InvalidVersion;
-
-        if (Header.Version == 1) {
-            if (Header.NodeCount == 1) { // Done only if there is the first header
-                Header.Node.NextNodeOffset = ByteSize - sizeof(Header) + sizeof(DMsNode);
-                File.seekp(0, std::ios::beg);
-            } else {
-                File.seekg(Header.LastNodeAddr, std::ios::beg); // Only seekg() is needed
-                DMsNode LastNode;
-                File.read(reinterpret_cast<char*>(&LastNode), sizeof(LastNode)); // Read the last node
-                //LastNode.NextNodeOffset = ByteSize; // The next node will be written at ByteSize
-                LastNode.NextNodeOffset = ByteSize - sizeof(LastNode) - File.tellg();
-
-                File.seekp(Header.LastNodeAddr, std::ios::beg);
-                File.write(reinterpret_cast<char*>(&LastNode), sizeof(LastNode)); // Write it back
-                File.seekp(0, std::ios::beg);
+                file.seekp(0, std::ios::beg);
             }
-            Header.NodeCount++;
-            Header.LastNodeAddr = ByteSize; // Update the last node address, it is this case every time
-            File.write(reinterpret_cast<char*>(&Header), sizeof(Header));
-            File.seekp(0, std::ios::end);
-            DMsNode Node(Seed);
-            File.write(reinterpret_cast<char*>(&Node), sizeof(Node)); // Write the new node to the end
-            std::uint64_t Key = DeriveKey(Seed, ContextStr);
-            EncryptDecrypt(Data, Key);
-            File.write(reinterpret_cast<char*>(Data.data()), Data.size()); // Write the new data at the very end
 
-            File.close();
-            return AppendDMsFileStatus::OK;
-        } else { // Version 2
-            if (Header.NodeCount == 1) { // Handle very special case
-                File.seekp(0, std::ios::beg);
+            // Update the header and write it back
+            ++header.node_count;
+            header.last_node_addr = filesize; // This case every time
+            file.write(reinterpret_cast<char*>(&header), sizeof(header));
+            file.seekp(0, std::ios::end);
 
-                Header.NodeCount++;
-                // No need to save an ExLastNodeAddr right?
-                Header.LastNodeAddr = ByteSize;
-                File.write(reinterpret_cast<char*>(&Header), sizeof(Header));
-                File.seekp(0, std::ios::end);
-                DMsNode Node(Seed);
-                // Don't be fooled it's a PrevNodeOffset in V2, if this doesn't work it's probably just pluses
-                Node.NextNodeOffset = ByteSize - sizeof(Header) + sizeof(Node);
-                // Offset from Node2 back to Node1 position: ByteSize - sizeof(Header)
-                //Node.NextNodeOffset = ByteSize - sizeof(Header);
-                File.write(reinterpret_cast<char*>(&Node), sizeof(Node));
-                //Header.LastNodeAddr = ByteSize; // Not Node.NextNodeOffset due to it being backwards
-                //File.seekp(0, std::ios::beg);
-                // Should be already at the end from writing the Node
+            DMsNode node;
+            node.seed = seed;
+            file.write(reinterpret_cast<char*>(&node), sizeof(node)); // Write just the node
+
+            std::uint64_t key = derive_key(seed, context_str);
+            encrypt_decrypt(data, key);
+            file.write(data.data(), data.size()); // Then the encrypted data
+
+        } else { // Backward linked
+
+            if (header.node_count == 1) { // Special case
+                file.seekp(0, std::ios::beg);
+
+                // Update header
+                ++header.node_count;
+                header.last_node_addr = filesize;
+                file.write(reinterpret_cast<char*>(&header), sizeof(header));
+
+                file.seekp(0, std::ios::end);
+                DMsNode node;
+                node.seed = seed;
+                // Don't be fooled, it's a prev_node_offset when we link backward
+                node.next_node_offset = filesize - sizeof(header);
+                file.write(reinterpret_cast<char*>(&node), sizeof(node));
             } else {
-                /*
-                File.seekg(Header.LastNodeAddr, std::ios::beg);
-                DMsNode LastNode;
-                File.read(reinterpret_cast<char*>(&LastNode), sizeof(LastNode)); // Read last node
-                // LastNode.NextNodeOffset, aka PrevNodeOffset in V2, shouldn't change?
-                File.seekp(Header.LastNodeAddr, std::ios::beg);
-                File.write(reinterpret_cast<char*>(&LastNode), sizeof(LastNode)); // Write it back
-                */
-                File.seekp(0, std::ios::beg);
+                file.seekp(0, std::ios::beg);
 
-                // Probably everything from here is 1-node-or-not-specific
-                Header.NodeCount++;
-                std::uint32_t ExLastNodeAddr = Header.LastNodeAddr; // Save it for linking the node later
-                Header.LastNodeAddr = ByteSize; // Still valid right?
-                File.write(reinterpret_cast<char*>(&Header), sizeof(Header));
-                File.seekp(0, std::ios::end);
-                DMsNode Node(Seed);
-                //Node.NextNodeOffset = ExLastNodeAddr; // Aka PrevNodeOffset
-                Node.NextNodeOffset = ByteSize - ExLastNodeAddr; // Offset to previous node
-                File.write(reinterpret_cast<char*>(&Node), sizeof(Node));
+                ++header.node_count;
+                std::uint64_t ex_last_node_addr = header.last_node_addr; // Save it for linking later
+                header.last_node_addr = filesize;
+                file.write(reinterpret_cast<char*>(&header), sizeof(header));
+
+                file.seekp(0, std::ios::beg);
+                DMsNode node;
+                node.seed = seed;
+                node.next_node_offset = filesize - ex_last_node_addr; // Offset to previous node
+                file.write(reinterpret_cast<char*>(&node), sizeof(node));
             }
-            std::uint64_t Key = DeriveKey(Seed, ContextStr);
-            EncryptDecrypt(Data, Key);
-            File.write(Data.data(), Data.size());
 
-            File.close();
-            return AppendDMsFileStatus::OK;
+            std::uint64_t key = derive_key(seed, context_str);
+            encrypt_decrypt(data, key);
+            file.write(data.data(), data.size());
+
         }
-    } catch (const std::ios_base::failure& E) {
-        if (File.bad()) {
-            File.close();
-            return AppendDMsFileStatus::FileFatalError;
-        } else {
-            File.close();
-            return AppendDMsFileStatus::FileOtherFail;
-        }
+
+        return AppendDMsFileError::OK;
+
+    } catch (const std::ios::failure&) {
+
+        if (file.bad())
+            return AppendDMsFileError::FileFatal;
+        else
+            return AppendDMsFileError::FileNonFatal;
+
     } catch (...) {
-        File.close();
-        return AppendDMsFileStatus::Exception;
+        return AppendDMsFileError::Exception;
     }
 }
 
-/// @brief Decrypt a DMs file's contents
-/// @param Path The path to the file
-/// @param ContextStr The context string used as part of the encryption process
-/// @param MaxNodes The amount of messages to decrypt. If `0` or greater than the actual
-///                 amount of messages in the file, every one is decrypted
-/// @return `DecryptDMsFileResponse Response`
-/// @note If the decryption process is interrupted due to integrity issues, `std::fstream` exceptions
-///       or other exceptions (not rethrown at the moment), every other member of the returned struct is
-///       zero-initialized except `ErrorStatus`
-[[nodiscard]] DecryptDMsFileResponse DecryptDMsFile(const std::string& Path, const std::string& ContextStr,
-    const std::uint16_t StartNode, const std::uint16_t MaxNodes) {
 
-    std::ifstream File(Path, std::ios::binary | std::ios::ate);
+/// @brief A scoped enum returned when decrypting a DMs file
+CONTROLZ_MAKE_SCOPED_ENUM (
+    DecryptDMsFileError, // Type name
+    std::uint16_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
 
-    if (!File) return { 0, DecryptDMsFileStatus::FileFatalError, {} };
-    File.exceptions(std::ios::badbit | std::ios::failbit);
-    DMsHeader Header;
+    // Enum values
+    OK                  = 0,
+    FileTooSmall        = 1 << 0,
+    InvalidMagic        = 1 << 1,
+    InvalidVersion      = 1 << 2,
+    InvalidConfig       = 1 << 3,
+    InvalidLastNodeAddr = 1 << 4,
+    FileDoesNotExist    = 1 << 5,
+    InvalidStartNode    = 1 << 6,
+    ZeroMaxNodes        = 1 << 7,
+    FileFatal           = 1 << 8,
+    FileNonFatal        = 1 << 9,
+    Exception           = 1 << 10
+)
+
+
+/// @brief Decrypt the contents of a DMs file
+/// @param path The path to the file
+/// @param context_str The context string used for the encryption process
+/// @param start_node The node at which to start decrypting (defaults to `0`)
+/// @param max_nodes The number of nodes to decrypt (defaults to `~0` and
+///                  is clamped to the maximum valid value)
+/// @return An enum bitmask with one or more errors that occurred during the operation
+[[nodiscard]]
+std::expected<std::vector<std::string>, DecryptDMsFileError> decrypt_dms_file(
+        const std::fs::path& path, const std::string& context_str,
+        const std::uint16_t start_node = 0, std::uint16_t max_nodes = ~0) noexcept {
+
+    DecryptDMsFileError errors;
+
+    if (max_nodes == 0) // Like what the hell
+        return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::ZeroMaxNodes);
+
+    if (!std::fs::exists(path)) errors |= DecryptDMsFileError::FileDoesNotExist;
+
+    if (errors) return std::unexpected<DecryptDMsFileError>(errors);
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::FileFatal);
+    file.exceptions(std::ios::badbit | std::ios::failbit);
 
     try {
-        // Calculate filesize in bytes with error checking
-        std::streampos TempSize = File.tellg();
 
-        if (TempSize == std::streampos(-1)) return { 0, DecryptDMsFileStatus::FileOtherFail, {} };
-        std::uint64_t ByteSize = static_cast<std::uint64_t>(TempSize);
-        // The `+ 1` is added because there can be a header but there must also be data
-        if (ByteSize < sizeof(Header) + 1) return { 0, DecryptDMsFileStatus::FileTooSmall, {} };
+        std::uint64_t filesize = std::fs::file_size(path);
+        if (filesize <= sizeof(DMsHeader))
+            return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::FileTooSmall);
 
-        File.seekg(0, std::ios::beg); // Reset cursor position
+        file.seekg(0, std::ios::beg);
 
-        File.read(reinterpret_cast<char*>(&Header), sizeof(Header));
-        switch (Header.verify()) { // Finally verify the header integrity
-            case DMsHeaderVerifyStatus::InvalidMagic:
-                return { 0, DecryptDMsFileStatus::InvalidMagic, {} };
-            case DMsHeaderVerifyStatus::NonZeroPadding:
-                return { 0, DecryptDMsFileStatus::NonZeroPadding, {} };
-            case DMsHeaderVerifyStatus::ZeroNodeCount:
-                return { 0, DecryptDMsFileStatus::ZeroNodeCount, {} };
-            case DMsHeaderVerifyStatus::InvalidLastNodeAddr:
-                return { 0, DecryptDMsFileStatus::InvalidLastNodeAddr, {} };
-        }
-        // The version check is done externally because technically the version could even reach 255
-        // Check for versions 1 or 2 in one operation
-        if (Header.Version - 1 > 1) return { 0, DecryptDMsFileStatus::InvalidVersion, {} };
+        DMsHeader header;
+        file.read(reinterpret_cast<char*>(&header), sizeof(header));
+        DMsHeaderVerifyError status = header.verify();
+        if (status & DMsHeaderVerifyError::InvalidMagic) errors |= DecryptDMsFileError::InvalidMagic;
+        if (status & DMsHeaderVerifyError::InvalidVersion) errors |= DecryptDMsFileError::InvalidVersion;
+        if (status & DMsHeaderVerifyError::InvalidConfig) errors |= DecryptDMsFileError::InvalidConfig;
+
+        if (errors) return std::unexpected<DecryptDMsFileError>(errors);
 
         // Check node ranges
-        if (StartNode > Header.NodeCount - 1) return { 0, DecryptDMsFileStatus::InvalidStartNode, {} };
-        if (StartNode + MaxNodes > Header.NodeCount) return { 0, DecryptDMsFileStatus::InvalidNodeRange, {} };
-        // Start decrypting
-        DecryptDMsFileResponse Response = { Header.Version, DecryptDMsFileStatus::OK, {} };
-        Response.Data.resize(MaxNodes == 0 || MaxNodes > Header.NodeCount ?
-            Header.NodeCount - StartNode : MaxNodes); // Should also work?
+        if (start_node >= header.node_count)
+            return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::InvalidStartNode);
+        if (start_node + max_nodes > header.node_count)
+            max_nodes = header.node_count - start_node; // Clamp it
 
-        if (Header.Version == 1) {
-            File.seekg(sizeof(DMsHeader) - sizeof(DMsNode), std::ios::beg);
-            std::uint32_t DataSize = 0;
-            DMsNode CurrentNode;
-            std::uint64_t Key = 0;
+        bool linking_type = ((header.config & 0b00000010) >> 1) != 0;
+
+        // Create it with the clamped size
+        std::vector<std::string> result(max_nodes);
+
+        if (!linking_type) { // Forward linking
+
+            file.seekg(sizeof(DMsHeader), std::ios::beg);
+            std::uint64_t data_size = 0;
+            DMsNode node;
+            std::uint64_t key = 0;
+
             // Placed oldest-first in the vector
-            for (std::uint16_t i = 0; i < (MaxNodes == 0 || MaxNodes > Header.NodeCount
-                    ? Header.NodeCount : MaxNodes + StartNode); ++i) { // Should work?
-                    // Maybe no `+StartNode` here and no `-StartNode` in indexes?
-                File.read(reinterpret_cast<char*>(&CurrentNode), sizeof(CurrentNode));
-                std::uint64_t DataStart = File.tellg(); // Position right after reading the node
-                if (i < StartNode) {
-                    File.seekg(DataStart + CurrentNode.NextNodeOffset - sizeof(CurrentNode), std::ios::beg);
+            for (std::uint16_t i = 0; i < start_node + max_nodes; ++i) {
+                file.read(reinterpret_cast<char*>(&node), sizeof(node));
+                std::uint64_t data_start = file.tellg(); // Position right after reading the node
+
+                // Pass iterations (we don't need to check for `max_nodes`)
+                if (i < start_node) {
+                    file.seekg(data_start + node.next_node_offset - sizeof(node));
                     continue;
                 }
 
-                if (CurrentNode.NextNodeOffset == 0)
-                    DataSize = ByteSize - DataStart; // From here to EOF
+                if (node.next_node_offset == 0)
+                    data_size = filesize - data_start; // From here to EOF
                 else
-                    DataSize = CurrentNode.NextNodeOffset - sizeof(CurrentNode); // From here to next node
+                    data_size = node.next_node_offset - sizeof(node); // From here to next node
 
-                Response.Data[i - StartNode].resize(DataSize);
-                File.read(Response.Data[i - StartNode].data(), DataSize);
-                Key = DeriveKey(CurrentNode.Seed, ContextStr);
-                EncryptDecrypt(Response.Data[i - StartNode], Key);
+                std::string& bucket = result[i - start_node];
+                bucket.resize(data_size, '\0');
+                file.read(bucket.data(), data_size);
+                key = derive_key(node.seed, context_str);
+                encrypt_decrypt(bucket, key);
 
-                if (CurrentNode.NextNodeOffset == 0) break;
-                // Seeking isn't needed because the cursor is already at the next node after reading data
+                // We might not need this since we already clamp `max_nodes`
+                if (node.next_node_offset == 0) break;
             }
-        } else { // Version 2
-            // Special case: if only one node, read from another offset
-            if (Header.NodeCount == 1) {
-                std::uint32_t DataSize = ByteSize - sizeof(Header);
-                Response.Data[0].resize(DataSize);
-                File.seekg(sizeof(Header), std::ios::beg);
-                File.read(Response.Data[0].data(), DataSize);
-                std::uint64_t Key = DeriveKey(Header.Node.Seed, ContextStr);
-                EncryptDecrypt(Response.Data[0], Key);
-            } else {
-                File.seekg(Header.LastNodeAddr, std::ios::beg);
-                std::uint32_t CurrentNodeAddr = 0;
-                std::uint32_t DataSize = 0;
-                std::uint32_t PrevNodeAddr = ByteSize;
-                DMsNode CurrentNode;
-                std::uint64_t Key = 0;
-                // Placed newest-first in the vector
-                for (std::uint16_t i = 0; i < (MaxNodes == 0 || MaxNodes > Header.NodeCount ?
-                        Header.NodeCount : MaxNodes + StartNode); ++i) {
-                        // Maybe no `+StartNode` here and no `-StartNode` in indexes?
-                    CurrentNodeAddr = File.tellg();
-                    File.read(reinterpret_cast<char*>(&CurrentNode), sizeof(CurrentNode));
 
-                    if (i < StartNode) { // Skip iteration
-                        PrevNodeAddr = CurrentNodeAddr;
-                        File.seekg(CurrentNodeAddr - CurrentNode.NextNodeOffset, std::ios::beg);
-                        continue;
-                    }
+        } else { // Backward linking
 
-                    // There should be no CurrentNode.NextNodeOffset == 0 special case
-                    DataSize = PrevNodeAddr - File.tellg();
+            if (header.node_count == 1) { // Special case
+                std::uint64_t data_size = filesize - sizeof(header) - sizeof(DMsNode);
+                std::string& bucket = result[0];
+                bucket.resize(data_size, '\0');
 
-                    Response.Data[i - StartNode].resize(DataSize);
-                    File.read(Response.Data[i - StartNode].data(), DataSize);
-                    Key = DeriveKey(CurrentNode.Seed, ContextStr);
-                    EncryptDecrypt(Response.Data[i - StartNode], Key);
+                DMsNode node; // Get the node for the seed
+                file.seekg(sizeof(header), std::ios::beg);
+                file.read(reinterpret_cast<char*>(&node), sizeof(node));
 
-                    // Still valid because the only node with a PrevNodeOffset value of 0 is the header
-                    if (CurrentNode.NextNodeOffset == 0) break;
-                    PrevNodeAddr = CurrentNodeAddr;
-                    // Go to next node
-                    File.seekg(CurrentNodeAddr - CurrentNode.NextNodeOffset, std::ios::beg);
+                file.read(bucket.data(), data_size);
+                std::uint64_t key = derive_key(node.seed, context_str);
+                encrypt_decrypt(bucket, key);
+
+                return result; // The caller should use std::move() but maybe RVO does it already
+            }
+
+            file.seekg(0, std::ios::beg);
+            std::uint64_t current_node_addr = 0;
+            std::uint64_t data_size = 0;
+            std::uint64_t prev_node_addr = filesize;
+            DMsNode node;
+            std::uint64_t key = 0;
+
+            // Placed newest-first in the vector
+            for (std::uint16_t i = 0; i < start_node + max_nodes; ++i) {
+                current_node_addr = file.tellg();
+                file.read(reinterpret_cast<char*>(&node), sizeof(node));
+
+                // We do this after the read because we need the next offset
+                if (i < start_node) { // Skip iteration
+                    prev_node_addr = current_node_addr;
+                    file.seekg(current_node_addr - node.next_node_offset, std::ios::beg);
+                    continue;
                 }
+
+                data_size = prev_node_addr - file.tellg();
+
+                std::string& bucket = result[i - start_node];
+                bucket.resize(data_size, '\0');
+                file.read(bucket.data(), data_size);
+                key = derive_key(node.seed, context_str);
+                encrypt_decrypt(bucket, key);
+
+                // Still valid because the only node with an offset of 0 is the first one
+                if (node.next_node_offset == 0) break;
+                prev_node_addr = current_node_addr;
+                // Go to next node
+                file.seekg(current_node_addr - node.next_node_offset, std::ios::beg);
             }
+
         }
 
-        File.close();
-        return Response; // The caller MUST use std::move()
+        return result;
 
-    } catch (const std::ios_base::failure& E) { // Every exception just returns Version = 0 instead of Response
-        if (File.bad()) {
-            File.close();
-            return { 0, DecryptDMsFileStatus::FileFatalError, {} };
-        } else {
-            File.close();
-            return { 0, DecryptDMsFileStatus::FileOtherFail, {} };
-        }
+    } catch (const std::ios::failure&) {
+
+        if (file.bad())
+            return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::FileFatal);
+        else
+            return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::FileNonFatal);
+
     } catch (...) {
-        File.close();
-        return { 0, DecryptDMsFileStatus::Exception, {} };
+            return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::Exception);
     }
 }
 
-[[nodiscard]] ConvertDMsFileStatus ConvertDMsFile(std::string& Path, std::uint8_t TargetVersion) {
 
-    std::fstream File(Path, std::ios::in | std::ios::out | std::ios::binary | std::ios::ate);
+/// @brief A scoped enum returned when converting a DMs file
+CONTROLZ_MAKE_SCOPED_ENUM (
+    ConvertDMsFileError, // Type name
+    std::uint16_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
 
-    if (!File) return ConvertDMsFileStatus::FileFatalError;
-    File.exceptions(std::ios::badbit | std::ios::failbit);
-    DMsHeader Header;
+    // Enum values
+    OK                  = 0,
+    FileTooSmall        = 1 << 0,
+    InvalidMagic        = 1 << 1,
+    InvalidVersion      = 1 << 2,
+    InvalidConfig       = 1 << 3,
+    InvalidLastNodeAddr = 1 << 4,
+    FileDoesNotExist    = 1 << 5,
+    TargetTypeIsCurrent = 1 << 6,
+    FileFatal           = 1 << 7,
+    FileNonFatal        = 1 << 8,
+    Exception           = 1 << 9
+)
+
+/// @brief Convert a DMs file to a target linking type
+/// @param path The path to the file
+/// @param target_linking_type The linking type to convert the file to
+/// @return An enum bitmask with one or more errors that occurred during the operation
+[[nodiscard]]
+ConvertDMsFileError convert_dms_file(const std::fs::path& path, bool target_linking_type) noexcept {
+
+    ConvertDMsFileError errors;
+
+    if (!std::fs::exists(path)) return ConvertDMsFileError::FileDoesNotExist;
+
+    std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+    if (!file) return ConvertDMsFileError::FileFatal;
+    file.exceptions(std::ios::badbit | std::ios::failbit);
 
     try {
-        // Calculate filesize in bytes with error checking
-        std::streampos TempSize = File.tellg();
 
-        if (TempSize == std::streampos(-1)) return ConvertDMsFileStatus::FileOtherFail;
-        std::uint64_t ByteSize = static_cast<std::uint64_t>(TempSize);
-        // The `+ 1` is added because there can be a header but there must also be data
-        if (ByteSize < sizeof(Header) + 1) return ConvertDMsFileStatus::FileTooSmall;
+        std::uint64_t filesize = std::fs::file_size(path);
+        if (filesize < sizeof(DMsHeader)) return ConvertDMsFileError::FileTooSmall;
 
-        File.seekg(0, std::ios::beg); // Reset cursor position
+        file.seekg(0, std::ios::beg);
+        DMsHeader header;
+        file.read(reinterpret_cast<char*>(&header), sizeof(header));
 
-        File.read(reinterpret_cast<char*>(&Header), sizeof(Header));
-        // Just return if the version is correct right away
-        if (Header.Version == TargetVersion) return ConvertDMsFileStatus::OK;
-        switch (Header.verify()) { // Finally verify the header integrity
-            case DMsHeaderVerifyStatus::InvalidMagic:
-                return ConvertDMsFileStatus::InvalidMagic;
-            case DMsHeaderVerifyStatus::NonZeroPadding:
-                return ConvertDMsFileStatus::NonZeroPadding;
-            case DMsHeaderVerifyStatus::ZeroNodeCount:
-                return ConvertDMsFileStatus::ZeroNodeCount;
-            case DMsHeaderVerifyStatus::InvalidLastNodeAddr:
-                return ConvertDMsFileStatus::InvalidLastNodeAddr;
-        }
-        // The version check is done externally because technically the version could even reach 255
-        // Check for versions 1 or 2 in one operation
-        if (Header.Version - 1 > 1) return ConvertDMsFileStatus::InvalidVersion;
+        DMsHeaderVerifyError status = header.verify();
+        if (status & DMsHeaderVerifyError::InvalidMagic) errors |= ConvertDMsFileError::InvalidMagic;
+        if (status & DMsHeaderVerifyError::InvalidVersion) errors |= ConvertDMsFileError::InvalidVersion;
+        if (status & DMsHeaderVerifyError::InvalidConfig) errors |= ConvertDMsFileError::InvalidConfig;
 
-        std::vector<std::uint32_t> NodeAddrs;
-        NodeAddrs.reserve(Header.NodeCount);
+        if (errors) return errors;
 
-        DMsNode CurrentNode;
-        std::uint32_t CurrentAddr = Header.Version == 1 ? sizeof(Header) - sizeof(CurrentNode) : Header.LastNodeAddr;
-        //if (Header.Version == 1)
-        //else
-        //CurrentAddr = Header.LastNodeAddr;
-        for (std::uint16_t i = 0; i < Header.NodeCount; ++i) {
-            NodeAddrs.push_back(CurrentAddr);
-            File.seekg(CurrentAddr, std::ios::beg);
-            File.read(reinterpret_cast<char*>(&CurrentNode), sizeof(CurrentNode));
-            if (CurrentNode.NextNodeOffset == 0) break;
-            if (Header.Version == 1)
-                CurrentAddr += CurrentNode.NextNodeOffset;
+        bool linking_type = ((header.config & 0b00000010) >> 1) != 0;
+        if (linking_type == target_linking_type) return ConvertDMsFileError::TargetTypeIsCurrent;
+
+        std::vector<std::uint64_t> node_addrs;
+        node_addrs.reserve(header.node_count);
+
+        DMsNode node;
+        std::uint64_t current_addr = !linking_type ? sizeof(header) : header.last_node_addr;
+
+        for (std::uint16_t i = 0; i < header.node_count; ++i) {
+            node_addrs.push_back(current_addr);
+
+            file.seekg(current_addr, std::ios::beg);
+            file.read(reinterpret_cast<char*>(&node), sizeof(node));
+
+            if (node.next_node_offset == 0) break;
+            if (!linking_type)
+                current_addr += node.next_node_offset;
             else
-                CurrentAddr -= CurrentNode.NextNodeOffset;
+                current_addr -= node.next_node_offset;
         }
 
-        // When converting to V2, set LastNodeAddr to the last node (which is NodeAddrs.back() after collecting)
-        // When converting to V1, keep it as-is (will be set later or is 0 for single-node)
-        if (TargetVersion == 2 && Header.NodeCount > 1) {
-            Header.LastNodeAddr = NodeAddrs.back();
-        }
+        // When converting to backward-linked set `last_node_addr` to `node_addrs.back()`
+        // When converting to forward-linked keep it as it is (will be set later or is 0
+        // for single-node)
+        if (target_linking_type && header.node_count > 1)
+            header.last_node_addr = node_addrs.back();
 
-        // Reverse NodeAddrs if converting from V2 to V1 for proper oldest-first ordering
-        if (Header.Version == 2) {
-            std::reverse(NodeAddrs.begin(), NodeAddrs.end());
-        }
+        // Reverse `node_addrs` for proper oldest-first ordering
+        if (linking_type)
+            std::reverse(node_addrs.begin(), node_addrs.end());
 
-        // Update version
-        Header.Version = TargetVersion;
-        // CurrentNode is still alive
-        for (std::uint16_t i = 0; i < Header.NodeCount; ++i) {
-            File.seekg(NodeAddrs[i], std::ios::beg);
-            File.read(reinterpret_cast<char*>(&CurrentNode), sizeof(CurrentNode));
+        // Update linking type
+        header.config |= (target_linking_type ? 1 : 0) << 1;
+        // `node` is still alive
+        for (std::uint16_t i = 0; i < header.node_count; ++i) {
+            file.seekg(node_addrs[i], std::ios::beg);
+            file.read(reinterpret_cast<char*>(&node), sizeof(node));
 
-            if (TargetVersion == 1)
-                CurrentNode.NextNodeOffset = (i == Header.NodeCount - 1) ? 0 : (NodeAddrs[i + 1] - NodeAddrs[i]);
+            if (!target_linking_type)
+                node.next_node_offset = (i == header.node_count - 1) ?
+                    0 : (node_addrs[i + 1] - node_addrs[i]);
             else
-                CurrentNode.NextNodeOffset = (i == 0) ? 0 : (NodeAddrs[i] - NodeAddrs[i - 1]);
+                node.next_node_offset = (i == 0) ? 0 : (node_addrs[i] - node_addrs[i - 1]);
 
-            File.seekp(NodeAddrs[i], std::ios::beg);
-            File.write(reinterpret_cast<char*>(&CurrentNode), sizeof(CurrentNode));
+            file.seekp(node_addrs[i], std::ios::beg);
+            file.write(reinterpret_cast<char*>(&node), sizeof(node));
         }
-        File.seekp(0, std::ios::beg);
-        // For V1 multi-node, LastNodeAddr must point to the last node; for single-node it should be 0
-        //if (TargetVersion == 1) {
-        //    Header.LastNodeAddr = (Header.NodeCount == 1) ? 0 : NodeAddrs.back();
-        //}
-        File.write(reinterpret_cast<char*>(&Header), sizeof(Header) - sizeof(CurrentNode));
 
-        File.close();
-        return ConvertDMsFileStatus::OK;
+        file.seekp(0, std::ios::beg);
+        // For backward-linked multi-node `last_node_addr` must point to the last node,
+        // for single-node it should be 0
+        file.write(reinterpret_cast<char*>(&header), sizeof(header));
 
-    } catch (const std::ios_base::failure& E) {
-        if (File.bad()) {
-            File.close();
-            return ConvertDMsFileStatus::FileFatalError;
-        } else {
-            File.close();
-            return ConvertDMsFileStatus::FileOtherFail;
-        }
+        return ConvertDMsFileError::OK;
+
+    } catch (const std::ios::failure&) {
+
+        if (file.bad())
+            return ConvertDMsFileError::FileFatal;
+        else
+            return ConvertDMsFileError::FileNonFatal;
+
     } catch (...) {
-        File.close();
-        return ConvertDMsFileStatus::Exception;
+        return ConvertDMsFileError::Exception;
     }
 
 }
+
 
 } // namespace ControlZ
 
