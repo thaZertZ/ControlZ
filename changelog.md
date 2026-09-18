@@ -1,11 +1,10 @@
 
 # Changelog
 
-## `src/headers/Mappings.hpp`:
+## Global:
 
-- Fixed bugs in the `append_map_file` and `deserialize_map_file` functions
-- Added an overload of `append_map_file` that allows appending multiple mappings at once
-- Created tests for the binary format and they all pass
+- Improved a lot of the config or metadata APIs for all headers by providing
+  `to_` and `from_` functions
 
 ## `docs/`:
 
