@@ -53,9 +53,9 @@ struct MapHeaderConfig {
     /// @param config The header byte to unpack
     static inline constexpr MapHeaderConfig from_config(std::uint8_t config) noexcept {
         return {
-            .version = (std::uint8_t)(config & 0b00000011),
-            .full = (std::uint8_t)((config >> 2) & 1) != 0, // Is the cast needed here?
-            .last_slot = (std::uint8_t)(config >> 3)
+            .version   = (std::uint8_t) (config       & 0b00000011),
+            .full      = (std::uint8_t)((config >> 2) & 1) != 0, // Is the cast needed here?
+            .last_slot = (std::uint8_t) (config >> 3)
         };
     }
 };

@@ -21,7 +21,7 @@ using AttachmentID = std::uint16_t;
 /// @param backing The backing type of the enum
 /// @param def The default value for the enum (used by the default constructor)
 /// @param zero The zero value (used when converting to `bool`)
-/// @param ...__VA_ARGS__ The enum variants separated by commas and with values optionally
+/// @param __VA_ARGS__... The enum variants separated by commas and with values optionally
 ///                       assigned to them
 #define CONTROLZ_MAKE_SCOPED_ENUM(name, backing, def, zero, ...) \
     class name { \
@@ -59,14 +59,8 @@ using AttachmentID = std::uint16_t;
         inline constexpr name& operator&=(name ## _enum other) noexcept { \
             return *this = *this & other; \
         } \
-        inline constexpr bool operator==(name other) const noexcept /* comparison */ { \
-            return value == other.value; \
-        } \
         inline constexpr bool operator==(name ## _enum other) const noexcept { \
             return value == other; \
-        } \
-        inline constexpr bool operator!=(name other) const noexcept { \
-            return !(*this == other); \
         } \
         inline constexpr bool operator!=(name ## _enum other) const noexcept { \
             return !(*this == other); \

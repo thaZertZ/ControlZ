@@ -79,6 +79,22 @@ CONTROLZ_MAKE_SCOPED_ENUM (
     InvalidConfig  = 1 << 2
 )
 
+struct DMsHeaderConfig {
+    bool linking_type = false;
+    bool compression_flag = false;
+
+    inline constexpr std::uint8_t to_config() const noexcept {
+        return ((linking_type ? 1 : 0) << 1) | (compression_flag ? 1 : 0);
+    }
+
+    static inline constexpr DMsHeaderConfig from_config(std::uint8_t config) noexcept {
+        return {
+            .linking_type     = (config & (1 << 1)) != 0,
+            .compression_flag = (config &  1)       != 0
+        };
+    }
+};
+
 #pragma pack(push, 1)
 
 /// @brief The file header of the DMs binary format
@@ -169,7 +185,9 @@ CreateDMsFileError create_dms_file(const std::fs::path& path, std::uint8_t versi
 
     DMsHeader header;
     header.node_count = 1;
-    header.config = ((linking_type ? 1 : 0) << 1) | (compress ? 1 : 0);
+    // More verbose but clearer
+    DMsHeaderConfig config = { .linking_type = linking_type, .compression_flag = compress };
+    header.config = config.to_config();
 
     if (std::fs::exists(path) && !force_overwrite)
         errors |= CreateDMsFileError::FileAlreadyExists;
@@ -259,8 +277,9 @@ AppendDMsFileError append_dms_file(const std::fs::path& path, std::string data,
 
         if (errors) return errors;
 
-        bool linking_type = ((header.config & 0b00000010) >> 1) != 0;
-        if (!linking_type) { // Forward linked
+        // Way easier to read and reason about
+        DMsHeaderConfig config = DMsHeaderConfig::from_config(header.config);
+        if (!config.linking_type) { // Forward linked
 
             if (header.node_count == 1) { // Special case
                 DMsNode first_node;
@@ -407,12 +426,13 @@ std::expected<std::vector<std::string>, DecryptDMsFileError> decrypt_dms_file(
         if (start_node + max_nodes > header.node_count)
             max_nodes = header.node_count - start_node; // Clamp it
 
-        bool linking_type = ((header.config & 0b00000010) >> 1) != 0;
+        // Easier to read
+        DMsHeaderConfig config = DMsHeaderConfig::from_config(header.config);
 
         // Create it with the clamped size
         std::vector<std::string> result(max_nodes);
 
-        if (!linking_type) { // Forward linking
+        if (!config.linking_type) { // Forward linking
 
             file.seekg(sizeof(DMsHeader), std::ios::beg);
             std::uint64_t data_size = 0;
@@ -566,14 +586,15 @@ ConvertDMsFileError convert_dms_file(const std::fs::path& path, bool target_link
 
         if (errors) return errors;
 
-        bool linking_type = ((header.config & 0b00000010) >> 1) != 0;
-        if (linking_type == target_linking_type) return ConvertDMsFileError::TargetTypeIsCurrent;
+        // Again easier to read and reason about
+        DMsHeaderConfig config = DMsHeaderConfig::from_config(header.config);
+        if (config.linking_type == target_linking_type) return ConvertDMsFileError::TargetTypeIsCurrent;
 
         std::vector<std::uint64_t> node_addrs;
         node_addrs.reserve(header.node_count);
 
         DMsNode node;
-        std::uint64_t current_addr = !linking_type ? sizeof(header) : header.last_node_addr;
+        std::uint64_t current_addr = !config.linking_type ? sizeof(header) : header.last_node_addr;
 
         for (std::uint16_t i = 0; i < header.node_count; ++i) {
             node_addrs.push_back(current_addr);
@@ -582,7 +603,7 @@ ConvertDMsFileError convert_dms_file(const std::fs::path& path, bool target_link
             file.read(reinterpret_cast<char*>(&node), sizeof(node));
 
             if (node.next_node_offset == 0) break;
-            if (!linking_type)
+            if (!config.linking_type)
                 current_addr += node.next_node_offset;
             else
                 current_addr -= node.next_node_offset;
@@ -595,7 +616,7 @@ ConvertDMsFileError convert_dms_file(const std::fs::path& path, bool target_link
             header.last_node_addr = node_addrs.back();
 
         // Reverse `node_addrs` for proper oldest-first ordering
-        if (linking_type)
+        if (config.linking_type)
             std::reverse(node_addrs.begin(), node_addrs.end());
 
         // Update linking type
