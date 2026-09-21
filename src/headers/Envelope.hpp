@@ -51,10 +51,10 @@ struct DMsMessageMetadata {
             result |= (length + 3) / 4; // Same
 
         result |= (length_encoding ? 1 : 0) << 0x8; // 1 bit
-        result |= (reply ? 1 : 0)           << 0x9; // 1 bit
-        result |= attachment_count          << 0xA; // 3 bits
-        result |= version                   << 0xD; // 2 bits
-        result |= (edit ? 1 : 0)            << 0xF; // 1 bit
+        result |= (reply           ? 1 : 0) << 0x9; // 1 bit
+        result |=  attachment_count         << 0xA; // 3 bits
+        result |=  version                  << 0xD; // 2 bits
+        result |= (edit            ? 1 : 0) << 0xF; // 1 bit
 
         return result;
     }

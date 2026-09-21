@@ -1,213 +1,235 @@
 
 # WebSocket
 
-The use of the WebSocket protocol in ControlZ internally is crucial:
-it is used as the main data exchange protocol between each client and
-the server.
+In ControlZ, the WebSocket protocol is used as the main data exchange
+method between clients and the server, and a custom ControlZ subprotocol
+has been ideated specifically for the case.
 
-## The ControlZ WsPacket subprotocol
+Here the specification of this subprotocol will be covered.
 
-ControlZ uses a custom WebSocket subprotocol called WsPacket, which 
-contains the packet type in the first byte:
+## Protocol header
 
-- `Invalid`: Invalid state (*not* used when sending data)
-- `Ack`: Acknowledgement
-- `Auth`: Authentication of a user
-- `Deauth`: Deauthentication of a user
-- `Download`: Download a file
-- `DownloadResponse`: Server response to a `Download` packet
-- `DownloadChunk`: A chunk of data to download to a file
-- `DM`: Send a Direct Message to a user (using the DMs format)
-- `InfoUser`: Get information about a user
-- `InfoUserResponse`: Server response to an `InfoUser` packet
-- `InfoChat`: Get information about a chat
-- `InfoChatResponse`: Server response to an `InfoChat` packet
-- `Nack`: Negative acknowledgement
-- `Send`: Send a message in a public chat
-- `Update`: Receive live update information (like messages)
-- `UpdateResponse`: Server response to an `Update` packet
-- `Upload`: Upload a file
-- `UploadResponse`: Server response to an `Upload` packet
-- `UploadChunk`: A chunk of data to upload to a file
+The first 10 bytes of each packet represent the same data:
 
-### `Ack` packet
+```
+0    :  Packet type and version
+1    :  Flags
+2-3  :  Packet ID
+4-5  :  Response ID
+6-9  :  Payload length
+```
 
-An `Ack` packet is made up by 4 bytes, the first byte is the `Ack` packet
-code itself, while the next three bytes are the ASCII values of the
-characters `ACK`.
+- **Packet type and version**: the kind of packet the payload represents and
+  the subprotocol version in a bitmask
+```
+7 6 5 4 3 2 1 0
+---------------
+v v v t t t t t
 
-### `Auth` packet
+t  :  Packet type
+v  :  Version
+```
+- **Flags**: a bitmask for packet metadata
+- **Packet ID**: a unique number associated with this packet (fragmented
+  and chunked packets don't override this, instead they keep the one of
+  the first packet in the chunk/fragment sequence)
+- **Response ID**: the **packet ID** field of the packet being responded to
+- **Payload length**: the length of the payload following this header
 
-An `Auth` packet is made up by 69 bytes, the first byte is the `Auth` packet
-code itself, while the next 68 bytes contain the following data:
+The packet metadata is structured like this:
 
-| Bytes | Type       | Data         | Description                               |
-| ----- | ---------- | ------------ | ----------------------------------------- |
-| 4     | `uint32_t` | UserID       | The ID of the user trying to authenticate |
-| 32    | `char[]`   | UsernameHash | An Argon2id hash of the username          |
-| 32    | `char[]`   | PswdHash     | An Argon2id hash of the password          |
+```
+7 6 5 4 3 2 1 0
+---------------
+x c r f a n b m
 
-### `Deauth` packet
+m  :  Request NACK
+b  :  Request ACK
+n  :  Respond with NACK
+a  :  Respond with ACK
+f  :  Fragment flag
+r  :  Response flag
+c  :  Chunk flag
+x  :  Reserved for future use
+```
 
-A `Deauth` packet is made up by 45 bytes, the first byte is the `Deauth` packet
-code itself, while the next 44 bytes contain the following data:
+- **Request NACK**: signal that the response packet must respond with NACK
+- **Request ACK**: signal that the response packet must respond with ACK
+- **Respond with NACK**: respond with NACK if the previous packet requested it
+- **Respond with ACK**: respond with ACK if the previous packet requested it
+- **Fragment flag**: set to `1` if more fragments of the same packet are coming,
+  set to `0` if this is the last or only fragment. Every fragment packet except
+  the first one must turn on the **chunk flag** bit
+- **Response flag**: signal that this packet is a response version of the type
+  of the last received packet (used when performing one-way requests)
+- **Chunk flag**: signal that this packet is a chunk of a previously sent packet
+  that initiated a chunk sequence by setting the **fragment flag** bit. The
+  last chunk packet of a sequence must turn the **fragment flag** bit off to
+  signal the end of it
 
-| Bytes | Type       | Data         | Description                                   |
-| ----- | ---------- | ------------ | --------------------------------------------- |
-| 4     | `uint32_t` | UserID       | The ID of the user trying to authenticate     |
-| 32    | `char[]`   | UsernameHash | An Argon2id hash of the username              |
-| 8     | `char[]`   | UserToken    | A token associated with the session to deauth |
+## Packet types
 
-### `Download` packet
+| Name       | Description                                         |
+| ---------- | --------------------------------------------------- |
+| `Auth`     | Authenticate a user                                 |
+| `Deauth`   | Deauthenticate a user                               |
+| `DM`       | Send a private message to a user                    |
+| `Download` | Download a file from the server                     |
+| `InfoChat` | Request information about a public chat             |
+| `InfoUser` | Request information about a user                    |
+| `Send`     | Send a public message in a chat                     |
+| `Update`   | Send new session information like incoming messages |
+| `Upload`   | Upload a file to the server                         |
+
+Here the individual packet payloads will be covered.
+
+### `Auth`
+
+```
+0-1  :  UserID
+x-y  :  Username hash
+z-w  :  Password hash
+```
+
+- **UserID**: the UserID associated with the user to authenticate
+- **Username hash**: an Argon2id hash of the username
+- **Password hash**: an Argon2id hash of the password
+
+#### Response
+
+```
+0-15  :  Session token
+```
+
+- **Session token**: a unique 16-character identifier for a user session.
+  This must be used when deauthenticating
+
+### `Deauth`
+
+```
+0-1   :  UserID
+2-17  :  Session token
+```
+
+- **User ID**: the UserID associated with the user to deauthenticate
+- **Session token**: the unique session identifier received upon authentication
+
+This packet expects an acknowledgement.
+
+#### Response
+
+The response only contains an acknowledgement.
+
+### `DM`
+
+```
+0-1  :  Recipient UserID
+---  :  Raw DMsMessage data
+```
+
+**Recipient UserID**: the UserID of the user receiving the message
+**Raw DMsMessage data**: message data serialized directly from a DMsMessage object
+
+This packet expects an acknowledgement.
+
+#### Response
+
+The response only contains an acknowledgement.
+
+If a negative acknowledgement is sent, the sender of the request packet must resend
+again the same packet, also conserving the same **sequence ID**.
+
+### `Download`
+
+```
+0-3  :  AttachmentID
+```
+
+- **AttachmentID**: the AttachmentID associated with the file to download
+
+This packet expects a fragmented/chunked response.
+
+#### Response
+
+```
+0-3  :  Chunk size
+4-7  :  Chunk count
+---  :  Original filename
+```
+
+- **Chunk size**: indicates how many bytes of file data each chunk will contain
+- **Chunk count**: indicates how many chunks will follow this packet
+- **Original filename**: a string containing the original name of the file to download
+
+After this packet, chunks will follow.
+
+#### Chunk
+
+```
+0-3  :  Chunk index
+---  :  Raw file data
+```
+
+- **Chunk index**: the number of the chunk in the sequence. This is used to ensure that
+  all chunks have arrived and helps sorting them
+- **Raw file data**: the raw data of the file to download. Note that the last chunk
+  may not contain the same amount of data bytes as all the other ones, because the file
+  size is not a multiple of the chosen chunk size
+
+Chunk packets keep the same **sequence ID** field as their parent response packet.
+
+The last chunk packet will expect an acknowledgement signifying that the client was able
+to receive and reconstruct the file contents. If a negative acknowledgement is received,
+the packet transmitting it must be a `DownloadChunks` packet, asking for one or more
+file chunks to be transmitted again.
+
+### `DownloadChunks`
+
+```
+---  :  Chunk indeces
+```
+
+- **Chunk indeces**: a variadic number of chunk indeces (32bit unsigned integers)
+  that the server must resend with a `Download` chunk packet
+
+Again, the last chunk expects an acknowledgement, and if a negative one is sent, this
+whole process repeats.
+
+### `InfoChat`
+
+```
+0-1  :  UserID
+2-3  :  ChatID
+```
+
+- **UserID**: the UserID of the user that is requesting the information
+- **ChatID**: the ChatID of the chat to get information about
+
+This packet expects an acknowledgement attached to a response, if a negative
+acknowledgement is received, the response should not hold any data.
+
+### `InfoUser`
+
+```
+0-1  :  UserID
+2-3  :  Target UserID
+```
+
+- **UserID**: the UserID of the user that is requesting the information
+- **Target UserID**: the UserID to get information about
+
+This packet expects an acknowledgement attached to a response, if a negative
+acknowledgement is received, the response should not hold any data.
+
+#### Response
 
 <!--
-the filename with which the file will be downloaded depends on the client, but
-the server should keep a map of the original filenames + the timestamps
-
-the Base32 alphabet is "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-
-when doing Upload and UploadResponse packets, remember to add a field for a delta
-uint32_t or uint16_t containing the number of milliseconds by which the upload
-timestamp was nudged to tell the client
+make this when the user format will be done,
+only allow some information to be transmitted
 -->
 
-| Bytes  | Type       | Data         | Description                                                              |
-| ------ | ---------- | ------------ | ------------------------------------------------------------------------ |
-| 1      | `bool`     | QueryMethod  | `true` if the filename provided is the timestamp, else the real filename |
-|        |            |              | `QueryMethod = true`                                                     |
-| 8      | `char[]`   | FilenameB32  | A Base32 value used to represent the filename timestamp in milliseconds  |
-| < 32   | `char[]`   | Extension    | The file extension in ASCII, 31 characters maximum                       |
-|        |            |              | `QueryMethod = false`                                                    |
-| 8      | `uint64_t` | FilenameSize | The number of characters of the original filename+extension (can't be 0) |
-| < 2^64 | `char[]`   | Filename     | The original filename+extension (can't be empty)                         |
+```
+WIP
+```
 
-### `DownloadResponse` packet
-
-| Bytes  | Type       | Data         | Description                                                              |
-| ------ | ---------- | ------------ | ------------------------------------------------------------------------ |
-| 1      | `bool`     | QueryMethod  | `true` if the filename provided is the timestamp, else the real filename |
-| 8      | `uint64_t` | FileSize     | The size of the file to download in bytes                                |
-| 8      | `uint64_t` | ChunkCount   | The number of chunks in which the file's data will be split and sent     |
-| 8      | `uint64_t` | FileID       | A randomly generated number used to indentify the file's chunks          |
-|        |            |              | `QueryMethod = true`                                                     |
-| 8      | `char[]`   | FilenameB32  | A Base32 value used to represent the filename timestamp in milliseconds  |
-| < 32   | `char[]`   | Extension    | The file extension in ASCII, 31 characters maximum                       |
-|        |            |              | `QueryMethod = false`                                                    |
-| 8      | `uint64_t` | FilenameSize | The number of characters of the original filename+extension (can't be 0) |
-| < 2^64 | `char[]`   | Filename     | The original filename+extension (can't be empty)                         |
-
-The `FileID` field is used when there are multiple files to download, and packets can arrive
-at different times due to multithreading, so multiple files could be downloading simultaneously
-and multiple chunks of the same file could not arrive in order, so we also have `ChunkCount` and
-later we will see `ChunkIndex`.
-
-### `DownloadChunk` packet
-
-| Bytes    | Type       | Data       | Description                                                               |
-| -------- | ---------- | ---------- | ------------------------------------------------------------------------- |
-| 8        | `uint64_t` | FileID     | A randomly generate number used to identify the file's chunks             |
-| 8        | `uint64_t` | ChunkIndex | The number of the file chunk based on the `ChunkCount` field used earlier |
-| 8        | `uint16_t` | DataSize   | The number of bytes occupied by the data sent after this field            |
-| DataSize | `char[]`   | Data       | Raw binary data beloging to the file chunk                                |
-
-### `DM` packet
-
-A `DM` packet is made up by an indefinite amount of bytes, the first one is the `DM` packet
-code itself, the next three bytes are respectively a padding byte and the two `DM` ASCII
-characters, while 4 more bytes are used to hold the UserID of the user to send the message to.
-
-After them, a serialized and unencrypted DMsMessageRAM object is transferred.
-
-**Note:** The serialized object to concatenate is created through the use of the `Envelope.hpp`
-header's API.
-
-### `InfoUser` packet
-
-An `InfoUser` packet is made up by 6 bytes, the first one is the `InfoUser` packet code
-itself, while the following 5 bytes contain the following data:
-
-| Bytes | Type       | Data           | Description                                                           |
-| ----- | ---------- | -------------- | --------------------------------------------------------------------- |
-| 1     | `bool`     | ResponseFormat | `true` if the response should contain JSON, `false` if binary is used |
-| 4     | `uint32_t` | UserID         | The UserID of the user to get info about                              |
-
-### `InfoUserResponse` packet
-
-| Bytes        | Type       | Data           | Description                                                             |
-| ------------ | ---------- | -------------- | ----------------------------------------------------------------------- |
-| 1            | `bool`     | ResponseFormat | `true` if the response contains JSON, `false` if binary is used instead |
-|              |            |                | `ResponseFormat = true`                                                 |
-| 8            | `uint64_t` | ResponseSize   | Specify the size in bytes of the following JSON data                    |
-| ResponseSize | `char[]`   | Data           | JSON data containing info about the requested user                      |
-|              |            |                | `ResponseFormat = false`                                                |
-| 8            | `uint64_t` | ResponseSize   | Specify the size in bytes of the following binary data                  |
-| ResponseSize | `char[]`   | Data           | Raw binary data containing info about the requested user                |
-
-### `InfoChat` packet
-
-An `InfoChat` packet is made up by 6 bytes, the first one is the `InfoChat` packet code
-itself, while the following 5 bytes contain the following data:
-
-| Bytes | Type       | Data           | Description                                                           |
-| ----- | ---------- | -------------- | --------------------------------------------------------------------- |
-| 1     | `bool`     | ResponseFormat | `true` if the response should contain JSON, `false` if binary is used |
-| 4     | `uint32_t` | ChatID         | The ChatID of the chat to get info about                              |
-
-### `InfoChatResponse` packet
-
-| Bytes        | Type       | Data           | Description                                                             |
-| ------------ | ---------- | -------------- | ----------------------------------------------------------------------- |
-| 1            | `bool`     | ResponseFormat | `true` if the response contains JSON, `false` if binary is used instead |
-|              |            |                | `ResponseFormat = true`                                                 |
-| 8            | `uint64_t` | ResponseSize   | Specify the size in bytes of the following JSON data                    |
-| ResponseSize | `char[]`   | Data           | JSON data containing info about the requested chat                      |
-|              |            |                | `ResponseFormat = false`                                                |
-| 8            | `uint64_t` | ResponseSize   | Specify the size in bytes of the following binary data                  |
-| ResponseSize | `char[]`   | Data           | Raw binary data containing info about the requested chat                |
-
-### `Send` packet
-
-A `Send` packet is made up by an indefinite amount of bytes, the first one is the `Send` packet
-code itself, the next three bytes contain the three `SND` ASCII characters, while 4 more bytes
-are used to hold the UserID of the user to send the message to.
-
-After them, a serialized and unencrypted DMsMessageRAM object is transferred.
-
-**Note:** The serialized object to concatenate is created through the use of the `Envelope.hpp`
-header's API.
-
-### `Update` packet
-
-An `Update` is too complex to implement right now since most of the data and its format, that this
-packet should carry, has not been defined well yet.
-
-### `UpdateResponse` packet
-
-Same as `Update` for now.
-
-### `Upload` packet
-
-| Bytes        | Type       | Data         | Description                                                                    |
-| ------------ | ---------- | ------------ | ------------------------------------------------------------------------------ |
-| 8            | `uint64_t` | FileSize     | The size of the file to upload in bytes                                        |
-| 8            | `uint64_t` | ChunkCount   | The number of chunks in which the file to upload will be split                 |
-| 8            | `uint64_t` | FilenameSize | The number of bytes that follow this field used to store the original filename |
-| FilenameSize | `char[]`   | Filename     | The original filename, *without* the extension, stored in the Extension field  |
-| 8            | `char[]`   | FilenameB32  | A Base32 value used to represent the filename timestamp in milliseconds        |
-| < 32         | `char[]`   | Extension    | The file extension in ASCII, 31 characters maximum                             |
-
-### `UploadResponse` packet
-
-| Bytes  | Type       | Data         | Description                                                                   |
-| ------ | ---------- | ------------ | ----------------------------------------------------------------------------- |
-| 4      | `uint32_t` | TimeDelta    | A value in milliseconds by which the originally provided timestamp was nudged |
-| 8      | `uint64_t` | FileID       | A randomly generated number to indetify the file during the transfer process  |
-
-### `UploadChunk` packet
-
-| Bytes    | Type       | Data       | Description                                                               |
-| -------- | ---------- | ---------- | ------------------------------------------------------------------------- |
-| 8        | `uint64_t` | FileID     | A randomly generate number used to identify the file's chunks             |
-| 8        | `uint64_t` | ChunkIndex | The number of the file chunk based on the `ChunkCount` field used earlier |
-| 8        | `uint16_t` | DataSize   | The number of bytes occupied by the data sent after this field            |
-| DataSize | `char[]`   | Data       | Raw binary data beloging to the file chunk                                |
+- **WIP**: WIP

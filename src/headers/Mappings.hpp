@@ -163,9 +163,10 @@ CONTROLZ_MAKE_SCOPED_ENUM (
     // Enum values
     OK                = 0,
     FileAlreadyExists = 1 << 0,
-    FileFatal         = 1 << 1,
-    FileNonFatal      = 1 << 2,
-    Exception         = 1 << 3
+    InvalidExtension  = 1 << 1,
+    FileFatal         = 1 << 2,
+    FileNonFatal      = 1 << 3,
+    Exception         = 1 << 4
 )
 
 /// @brief Create an empty mapping file
@@ -175,8 +176,8 @@ CONTROLZ_MAKE_SCOPED_ENUM (
 [[nodiscard]]
 CreateMapFileError create_map_file(const std::fs::path& path, bool force_overwrite = false) noexcept {
 
-    if (std::fs::exists(path) && !force_overwrite)
-        return CreateMapFileError::FileAlreadyExists;
+    if (std::fs::exists(path) && !force_overwrite) return CreateMapFileError::FileAlreadyExists;
+    if (path.extension() != ".map") return CreateMapFileError::InvalidExtension;
 
     std::ofstream file(path, std::ios::binary);
     if (!file) return CreateMapFileError::FileFatal;
@@ -217,22 +218,25 @@ CONTROLZ_MAKE_SCOPED_ENUM (
     OK               = 0,
     MisalignedData   = 1 << 0,
     FileDoesNotExist = 1 << 1,
-    AlreadyFull      = 1 << 2,
-    DataWouldNotFit  = 1 << 3,
-    TruncatedData    = 1 << 4,
-    NowFilled        = 1 << 5,
-    FileFatal        = 1 << 6,
-    FileNonFatal     = 1 << 7,
-    Exception        = 1 << 8,
+    InvalidMagic     = 1 << 2,
+    InvalidVersion   = 1 << 3,
+    InvalidExtension = 1 << 4,
+    AlreadyFull      = 1 << 5,
+    DataWouldNotFit  = 1 << 6,
+    TruncatedData    = 1 << 7,
+    NowFilled        = 1 << 8,
+    FileFatal        = 1 << 9,
+    FileNonFatal     = 1 << 10,
+    Exception        = 1 << 11
 )
 
 /// @brief Helper concept for a generic type allowed to be serialized into a mapping file
 /// @tparam Type The generic type
 template <typename Type>
 concept MappingType = requires (std::string str) {
-    { std::declval<Type>().size() } -> std::same_as<std::size_t>; // Bytesize
+    { std::declval<Type>().size() } -> std::same_as<std::size_t>; // Size of hypothetically serialized data
     { std::declval<Type>().serialize() } -> std::same_as<std::string>; // Serialize to bytes
-    Type::from_bytes(str); // Constructor
+    { Type::from_bytes(str) } -> std::same_as<Type>; // Constructor
 };
 
 /// @brief An internal helper for `append_map_entry`. This is not intended to be used alone
@@ -323,6 +327,7 @@ template <MappingType Mapping>
 AppendMapFileError append_map_file(const std::fs::path& path, const Mapping& mapping) noexcept {
 
     if (!std::fs::exists(path)) return AppendMapFileError::FileDoesNotExist;
+    if (path.extension() != ".map") return AppendMapFileError::InvalidExtension;
 
     AppendMapFileError errors;
 
@@ -336,6 +341,13 @@ AppendMapFileError append_map_file(const std::fs::path& path, const Mapping& map
 
         MapHeader header;
         file.read(reinterpret_cast<char*>(&header), sizeof(header));
+
+        MapHeaderVerifyError status = header.verify();
+        if (status & MapHeaderVerifyError::InvalidMagic) errors |= AppendMapFileError::InvalidMagic;
+        if (status & MapHeaderVerifyError::InvalidVersion) errors |= AppendMapFileError::InvalidVersion;
+
+        if (errors) return errors;
+
         MapHeaderConfig config = MapHeaderConfig::from_config(header.config);
 
         return append_map_entry(file, header, config, mapping);
@@ -361,7 +373,10 @@ template <MappingType Mapping>
 [[nodiscard]]
 AppendMapFileError append_map_file(const std::fs::path& path, const std::vector<Mapping>& mappings) noexcept {
 
-    if (!std::fs::exists(path)) return AppendMapFileError::FileDoesNotExist;
+    AppendMapFileError errors;
+
+    if (!std::fs::exists(path)) errors |= AppendMapFileError::FileDoesNotExist;
+    if (path.extension() != ".map") errors |= AppendMapFileError::InvalidExtension;
 
     std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
     if (!file) return AppendMapFileError::FileFatal;
@@ -373,6 +388,13 @@ AppendMapFileError append_map_file(const std::fs::path& path, const std::vector<
         MapHeader header;
         file.seekg(0, std::ios::beg);
         file.read(reinterpret_cast<char*>(&header), sizeof(header));
+
+        MapHeaderVerifyError status = header.verify();
+        if (status & MapHeaderVerifyError::InvalidMagic) errors |= AppendMapFileError::InvalidMagic;
+        if (status & MapHeaderVerifyError::InvalidVersion) errors |= AppendMapFileError::InvalidVersion;
+
+        if (errors) return errors;
+
         MapHeaderConfig config = MapHeaderConfig::from_config(header.config);
 
         AppendMapFileError errors;
@@ -410,11 +432,12 @@ CONTROLZ_MAKE_SCOPED_ENUM (
     OK               = 0,
     InvalidMagic     = 1 << 0,
     InvalidVersion   = 1 << 1,
-    FileDoesNotExist = 1 << 2,
-    MisalignedData   = 1 << 3,
-    FileFatal        = 1 << 4,
-    FileNonFatal     = 1 << 5,
-    Exception        = 1 << 6
+    InvalidExtension = 1 << 2,
+    FileDoesNotExist = 1 << 3,
+    MisalignedData   = 1 << 4,
+    FileFatal        = 1 << 5,
+    FileNonFatal     = 1 << 6,
+    Exception        = 1 << 7
 )
 
 /// @brief Deserialize the contents of a mapping file
@@ -435,6 +458,8 @@ std::expected<std::vector<Mapping>, DeserializeMapFileError> deserialize_map_fil
             
     if (!std::fs::exists(path))
         return std::unexpected<DeserializeMapFileError>(DeserializeMapFileError::FileDoesNotExist);
+    if (path.extension() != ".map")
+        return std::unexpected<DeserializeMapFileError>(DeserializeMapFileError::InvalidExtension);
 
     std::uint64_t filesize = std::fs::file_size(path);
     if (filesize % 2 != 0)

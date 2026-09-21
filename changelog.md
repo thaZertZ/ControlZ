@@ -3,9 +3,18 @@
 
 ## Global:
 
-- Improved a lot of the config or metadata APIs for all headers by providing
-  `to_` and `from_` functions
+- Added more documentation to all headers
+- Fixed dumb bugs in `Mappings.hpp`, `Envelope.hpp` and `DMs.hpp`
+
+## `src/headers/User.hpp`:
+
+- Added this header for dealing with the user binary format
+
+## `src/headers/Time.hpp`:
+
+- Added this header for dealing with the custom timestamps and timezones
 
 ## `docs/`:
 
-- Added specifications and documentation for `Envelope.hpp` and `DMs.hpp`.
+- Added a partial specification for `WebSocket.md`
+- Added the specification for the user binary format in `User.md`

@@ -25,6 +25,8 @@ namespace ControlZ {
 template <typename... Args>
 requires (AllSameAs<std::string, Args...>)
 inline constexpr std::string derive_context_string(const std::string& x, const Args&... args) {
+    // Consider allowing a first constexpr parameter or a template
+    // parameter to be a `char` value to use for concatenating
     if constexpr (sizeof...(args) == 0) {
         return x;
     } else {
@@ -200,7 +202,7 @@ CreateDMsFileError create_dms_file(const std::fs::path& path, std::uint8_t versi
 
     try {
 
-        file.seekp(std::ios::beg);
+        file.seekp(0, std::ios::beg);
         file.write(reinterpret_cast<char*>(&header), sizeof(header));
 
     } catch (const std::ios::failure&) {
@@ -232,11 +234,12 @@ CONTROLZ_MAKE_SCOPED_ENUM (
     InvalidVersion      = 1 << 2,
     InvalidConfig       = 1 << 3,
     InvalidLastNodeAddr = 1 << 4,
-    MisalignedData      = 1 << 5,
-    FileDoesNotExist    = 1 << 6,
-    FileFatal           = 1 << 7,
-    FileNonFatal        = 1 << 8,
-    Exception           = 1 << 9
+    InvalidExtension    = 1 << 5,
+    MisalignedData      = 1 << 6,
+    FileDoesNotExist    = 1 << 7,
+    FileFatal           = 1 << 8,
+    FileNonFatal        = 1 << 9,
+    Exception           = 1 << 10
 )
 
 
@@ -254,8 +257,8 @@ AppendDMsFileError append_dms_file(const std::fs::path& path, std::string data,
 
     if (data.size() % 2 != 0) return AppendDMsFileError::MisalignedData; // We want padding of 2
 
-    if (!std::fs::exists(path))
-        return AppendDMsFileError::FileDoesNotExist;
+    if (!std::fs::exists(path)) return AppendDMsFileError::FileDoesNotExist;
+    if (path.extension() != ".dm") return AppendDMsFileError::InvalidExtension;
 
     std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
     if (!file) return AppendDMsFileError::FileFatal;
@@ -369,12 +372,13 @@ CONTROLZ_MAKE_SCOPED_ENUM (
     InvalidVersion      = 1 << 2,
     InvalidConfig       = 1 << 3,
     InvalidLastNodeAddr = 1 << 4,
-    FileDoesNotExist    = 1 << 5,
-    InvalidStartNode    = 1 << 6,
-    ZeroMaxNodes        = 1 << 7,
-    FileFatal           = 1 << 8,
-    FileNonFatal        = 1 << 9,
-    Exception           = 1 << 10
+    InvalidExtension    = 1 << 5,
+    FileDoesNotExist    = 1 << 6,
+    InvalidStartNode    = 1 << 7,
+    ZeroMaxNodes        = 1 << 8,
+    FileFatal           = 1 << 9,
+    FileNonFatal        = 1 << 10,
+    Exception           = 1 << 11
 )
 
 
@@ -395,9 +399,8 @@ std::expected<std::vector<std::string>, DecryptDMsFileError> decrypt_dms_file(
     if (max_nodes == 0) // Like what the hell
         return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::ZeroMaxNodes);
 
-    if (!std::fs::exists(path)) errors |= DecryptDMsFileError::FileDoesNotExist;
-
-    if (errors) return std::unexpected<DecryptDMsFileError>(errors);
+    if (!std::fs::exists(path)) return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::FileDoesNotExist);
+    if (path.extension() != ".dm") return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::InvalidExtension);
 
     std::ifstream file(path, std::ios::binary);
     if (!file) return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::FileFatal);
@@ -548,11 +551,12 @@ CONTROLZ_MAKE_SCOPED_ENUM (
     InvalidVersion      = 1 << 2,
     InvalidConfig       = 1 << 3,
     InvalidLastNodeAddr = 1 << 4,
-    FileDoesNotExist    = 1 << 5,
-    TargetTypeIsCurrent = 1 << 6,
-    FileFatal           = 1 << 7,
-    FileNonFatal        = 1 << 8,
-    Exception           = 1 << 9
+    InvalidExtension    = 1 << 5,
+    FileDoesNotExist    = 1 << 6,
+    TargetTypeIsCurrent = 1 << 7,
+    FileFatal           = 1 << 8,
+    FileNonFatal        = 1 << 9,
+    Exception           = 1 << 10
 )
 
 /// @brief Convert a DMs file to a target linking type
@@ -565,6 +569,7 @@ ConvertDMsFileError convert_dms_file(const std::fs::path& path, bool target_link
     ConvertDMsFileError errors;
 
     if (!std::fs::exists(path)) return ConvertDMsFileError::FileDoesNotExist;
+    if (path.extension() != ".dm") return ConvertDMsFileError::InvalidExtension;
 
     std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
     if (!file) return ConvertDMsFileError::FileFatal;
