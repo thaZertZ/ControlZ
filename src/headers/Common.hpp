@@ -189,7 +189,7 @@ enum class FileExtension : std::uint16_t {
 
 /// @brief Generate an unsigned 64bit random number safely
 std::uint64_t random_number() noexcept {
-    static thread_local std::mt19937 twister;
+    static thread_local std::mt19937 twister(std::random_device{}());
     std::uniform_int_distribution<std::uint64_t> dist(0, ~0ULL);
     return dist(twister);
 }

@@ -63,14 +63,14 @@ struct DMsMessageMetadata {
     /// @param meta The field to unpack
     static inline constexpr DMsMessageMetadata from_metadata(std::uint16_t meta) noexcept {
         return {
-            .edit             =                (meta                   >> 0xF) != 0,
+            .edit             =                (meta                   >> 0xF)    != 0,
             .version          = (std::uint8_t)((meta & (0b11  << 0xD)) >> 0xD),
             .attachment_count = (std::uint8_t)((meta & (0b111 << 0xA)) >> 0xA),
-            .reply            =               ((meta & 0x9)            >> 9)   != 0,
-            .length_encoding  =                (meta & 0x8)                    != 0,
-            .length           =                (meta & 0x8)       ? // Which length encoding?
-                               (std::uint16_t)((meta & 0xFF) * 8) : // Long encoding
-                               (std::uint16_t)((meta & 0xFF) * 4)   // Short encoding
+            .reply            =               ((meta & (0b1 << 0x9))   >> 9)      != 0,
+            .length_encoding  =                (meta & (0b1 << 0x8))              != 0,
+            .length           =                (meta & (0b1 << 0x8)) ? // Which length encoding?
+                               (std::uint16_t)((meta & 0xFF) * 8)    : // Long encoding
+                               (std::uint16_t)((meta & 0xFF) * 4)      // Short encoding
         };
     }
 };
@@ -114,31 +114,26 @@ struct DMsMessageReplies {
     /// @brief A pointer to a heap-allocated array of `Timestamp`s.
     ///        Do NOT serialize this struct by `memcpy`ing, instead
     ///        call `serialize()` to include the actual pointed-to data
-    Timestamp* timestamps = nullptr;
-
-    DMsMessageReplies() noexcept = default;
-    ~DMsMessageReplies() noexcept {
-        if (timestamps) delete[] timestamps; // Simple but necessary RAII guard
-    }
+    std::vector<Timestamp> timestamps;
 
     /// @brief Construct an object specifying the number of timestamps to allocate
     /// @param count The number of timestamps
     DMsMessageReplies(std::uint8_t count) {
         reply_count = count == 0 ? 0 : count - 1;
         padding_null_byte = 0;
-        timestamps = new Timestamp[reply_count];
+        timestamps.resize(reply_count, 0);
     }
 
     /// @brief Return `true` if there are allocated timestamps. Note that the
     ///        `reply_count` member will always encode a non-zero value, but the
     ///        actual `timestamps` pointer could be `nullptr`
     inline constexpr operator bool() const noexcept {
-        return timestamps != nullptr;
+        return timestamps.data() != nullptr;
     }
 
     /// @brief Return the size that a serialized payload would have
     inline constexpr std::size_t size() const noexcept {
-        return 2 + (reply_count + 1 /* biased encoding */);
+        return 2 + (reply_count + 1 /* biased encoding */) * sizeof(Timestamp);
     }
 
     /// @brief Return a string of bytes containing a serialized version of this struct
@@ -147,8 +142,8 @@ struct DMsMessageReplies {
 
         std::memcpy(result.data(), this, 2); // Copy the first two bytes
         
-        if (!timestamps) return result; // The timestamps are all zero since we haven't allocated anything
-        std::memcpy(result.data() + 2, timestamps, reply_count + 1);
+        if (!timestamps.data()) return result; // The timestamps are all zero since we haven't allocated anything
+        std::memcpy(result.data() + 2, timestamps.data(), timestamps.size() * sizeof(Timestamp));
 
         return result;
     }
@@ -214,7 +209,7 @@ struct DMsMessage {
         std::size_t final_size = sizeof(header);
         if (replies) final_size += replies.value().size();
         if (attachments)
-            final_size += attachments.value().size() * sizeof(attachments.value().front());
+            final_size += attachments.value().size() * sizeof(DMsMessageAttachment);
         if (payload) final_size += payload.value().data.size();
 
         output.resize(final_size, 0);

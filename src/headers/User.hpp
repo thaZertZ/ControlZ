@@ -179,7 +179,7 @@ struct UserFile {
 
     /// @brief Return the size of a hypothetically serialized `UserFile` object
     inline constexpr std::size_t size() const noexcept {
-        std::size_t result = sizeof(header) + username.size() + bio.size() + friends.size();
+        std::size_t result = sizeof(header) + username.size() + bio.size() + friends.size() * sizeof(UserID);
         return result % 2 == 0 ? result : result + 1; // Account for padding
     }
 
@@ -242,7 +242,7 @@ CreateUserFileError create_user_file(const std::fs::path& path, const UserFile& 
     if (path.extension() != ".usr")
         errors |= CreateUserFileError::InvalidExtension;
 
-    if (!std::fs::exists(path) && !force_overwrite)
+    if (std::fs::exists(path) && !force_overwrite)
         errors |= CreateUserFileError::FileAlreadyExists;
 
     // Check if we broke invariants

@@ -186,7 +186,6 @@ CreateDMsFileError create_dms_file(const std::fs::path& path, std::uint8_t versi
     if (path.extension() != ".dm") errors |= CreateDMsFileError::InvalidExtension;
 
     DMsHeader header;
-    header.node_count = 1;
     // More verbose but clearer
     DMsHeaderConfig config = { .linking_type = linking_type, .compression_flag = compress };
     header.config = config.to_config();

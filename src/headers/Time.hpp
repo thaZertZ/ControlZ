@@ -24,14 +24,14 @@ inline Timestamp timestamp_now() noexcept {
     return elapsed > 0 ? static_cast<Timestamp>(elapsed) : 0; // Clamp to 0 if too low
 }
 
-/// @brief Convert a UNIX timestamp into a custom timestamp
+/// @brief Convert a UTC UNIX timestamp into a custom UTC timestamp
 /// @param t The UNIX timestamp
 inline constexpr Timestamp unix_to_custom(std::int64_t t) noexcept {
     const auto epoch = custom_epoch_seconds();
     return t > epoch ? static_cast<Timestamp>(t - epoch) : 0;
 }
 
-/// @brief Convert a custom timestamp to a UNIX timestamp
+/// @brief Convert a custom UTC timestamp to a UNIX UTC timestamp
 /// @param t The custom timestamp
 inline constexpr std::int64_t custom_to_unix(Timestamp t) noexcept {
     return custom_epoch_seconds() + static_cast<std::int64_t>(t);
