@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 #include <cstring>
+#include <utility> // std::to_underlying()
 
 namespace ControlZ {
 
@@ -73,6 +74,26 @@ struct DMsMessageMetadata {
                                (std::uint16_t)((meta & 0xFF) * 4)      // Short encoding
         };
     }
+
+    /// @brief Return a length value encoded with a provided length encoding
+    /// @param length The value to encode
+    /// @param length_encoding The specified encoding
+    static inline constexpr std::uint16_t encoded_length(std::uint16_t length, bool length_encoding) noexcept {
+        return length * (
+            length_encoding ? 8 : 4
+        );
+    }
+
+    /// @brief Return a length value decoded with a provided length encoding
+    /// @param length The value to decode
+    /// @param length_encoding The specified encoding
+    static inline constexpr std::uint16_t decoded_length(std::uint16_t length, bool length_encoding) noexcept {
+        return (
+            length_encoding        ? // Which length encoding?
+            ((length + 7) / 8) * 8 : // Long encoding
+            ((length + 3) / 4) * 4   // Short encoding
+        );
+    }
 };
 
 #pragma pack(push, 1)
@@ -105,12 +126,37 @@ struct DMsMessageHeader {
     }
 };
 
+/// @brief Convert in-place the endianness of a `DMsMessageHeader` if the host is little endian
+/// @param header The header to convert
+template <>
+inline constexpr void network_byte_order(DMsMessageHeader& header) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return;
+    header.timestamp = std::byteswap(header.timestamp);
+    header.user_id = std::byteswap(header.user_id);
+    header.metadata = std::byteswap(header.metadata);
+}
+
+/// @brief Return a value with the converted endianness of another value
+///        of type `DMsMessageHeader` if the host is little endian
+/// @param header The header to convert
+template <>
+inline constexpr DMsMessageHeader network_byte_order_copy(const DMsMessageHeader& header) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return header;
+    return {
+        .timestamp = std::byteswap(header.timestamp),
+        .user_id = std::byteswap(header.user_id),
+        .metadata = std::byteswap(header.metadata)
+    };
+}
+
+#pragma pack(pop) // We don't need it for DMsMessageReplies since it has a vector
+
 /// @brief A struct representing the dynamic reply payload in a DMsMessage
 struct DMsMessageReplies {
     /// @brief The number of replies biased by `-1` (eg. `0` encodes `1`)
     std::uint8_t reply_count = 0;
     /// @brief The name says it all :)
-    std::uint8_t padding_null_byte = 0;
+    const std::uint8_t padding_null_byte = 0;
     /// @brief A pointer to a heap-allocated array of `Timestamp`s.
     ///        Do NOT serialize this struct by `memcpy`ing, instead
     ///        call `serialize()` to include the actual pointed-to data
@@ -118,10 +164,15 @@ struct DMsMessageReplies {
 
     /// @brief Construct an object specifying the number of timestamps to allocate
     /// @param count The number of timestamps
-    DMsMessageReplies(std::uint8_t count) {
+    DMsMessageReplies(std::uint8_t count) : padding_null_byte(0) {
         reply_count = count == 0 ? 0 : count - 1;
-        padding_null_byte = 0;
         timestamps.resize(reply_count, 0);
+    }
+
+    /// @brief Construct an object specifying a list of timestamps to allocate
+    /// @param list The list of timestamps
+    DMsMessageReplies(const std::vector<Timestamp>& list) : padding_null_byte(0), timestamps(list) {
+        reply_count = list.empty() ? 0 : list.size() - 1;
     }
 
     /// @brief Return `true` if there are allocated timestamps. Note that the
@@ -133,21 +184,30 @@ struct DMsMessageReplies {
 
     /// @brief Return the size that a serialized payload would have
     inline constexpr std::size_t size() const noexcept {
-        return 2 + (reply_count + 1 /* biased encoding */) * sizeof(Timestamp);
+        return 2 + (timestamps.empty() ?
+            1 : // We need at least a value
+            reply_count + 1 // Biased encoding
+        ) * sizeof(Timestamp);
     }
 
     /// @brief Return a string of bytes containing a serialized version of this struct
-    inline constexpr std::string serialize() const noexcept {
+    inline constexpr std::string serialize() noexcept {
+        // Correct any mismatch in data (assuming that the timestamps vector is not empty else add a 0 element)
+        if (timestamps.empty()) timestamps.push_back(0);
+        reply_count = timestamps.size() - 1;
+
         std::string result(this->size(), '\0'); // Resize and zero out
 
         std::memcpy(result.data(), this, 2); // Copy the first two bytes
-        
+
         if (!timestamps.data()) return result; // The timestamps are all zero since we haven't allocated anything
         std::memcpy(result.data() + 2, timestamps.data(), timestamps.size() * sizeof(Timestamp));
 
         return result;
     }
 };
+
+#pragma pack(push, 1)
 
 /// @brief A struct representing a file attachment in a DMsMessage
 struct DMsMessageAttachment {
@@ -159,12 +219,28 @@ struct DMsMessageAttachment {
     ///        a client must ask the server for the original extension of the file,
     ///        contained in a mapping file
     FileExtension extension = FileExtension::None;
-
-    /// @brief Construct an object with an `AttachmentID`
-    /// @param aid The `AttachmentID`
-    DMsMessageAttachment(AttachmentID aid) noexcept
-        : id(aid) {}
 };
+
+/// @brief Convert in-place the endianness of a `DMsMessageAttachment` if the host is little endian
+/// @param attachment The attachment to convert
+template <>
+inline constexpr void network_byte_order(DMsMessageAttachment& attachment) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return;
+    attachment.id = std::byteswap(attachment.id);
+    attachment.extension = static_cast<FileExtension>(std::byteswap(std::to_underlying(attachment.extension)));
+}
+
+/// @brief Return a value with the converted endianness of another value
+///        of type `DMsMessageAttachment` if the host is little endian
+/// @param attachment The attachment to convert
+template <>
+inline constexpr DMsMessageAttachment network_byte_order_copy(const DMsMessageAttachment& attachment) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return attachment;
+    return {
+        .id = std::byteswap(attachment.id),
+        .extension = static_cast<FileExtension>(std::byteswap(std::to_underlying(attachment.extension)))
+    };
+}
 
 /// @brief A struct representing the message payload of a DMsMessage
 struct DMsMessagePayload {
@@ -201,43 +277,95 @@ struct DMsMessage {
     /// @brief An optional message payload
     std::optional<DMsMessagePayload> payload;
 
+    /// @brief Return `true` if the payload would be truncated even with long encoding
+    inline constexpr bool would_truncate_payload() const noexcept {
+        if (payload && // Only if we have a payload
+            payload->data.size() > 2040 // More than the max value
+        ) return true;
+        return false; // Default case
+    }
+
+    /// @brief Return `true` if the length of the payload would require to use long encoding
+    inline constexpr bool would_need_long_encoding() const noexcept {
+        if (payload && // Only if we have a payload
+            !header.length_encoding() && // If it's not long encoding already
+            payload->data.size() > 1020 // More than the max value
+        ) return true;
+        return false; // Default case
+    }
+
+    /// @brief Return the size in bytes of a hypothetically serialized instance of this object
+    inline constexpr std::size_t size() const noexcept {
+        std::size_t result = sizeof(header);
+        if (replies) result += replies->size();
+        if (attachments) result += attachments->size() * sizeof(DMsMessageAttachment);
+        if (payload)
+            result += (this->would_need_long_encoding()
+                    && this->would_truncate_payload()   ? // Change behaviour occasionally
+                2040                                    : // Saturate the value
+                payload->data.size()                      // Or just use a regular size
+            );
+        return result;
+    }
+
     /// @brief Create a string of bytes representing a supposedly valid
     ///        message from this instance
     inline constexpr std::string serialize() {
-        std::string output;
+        // Before doing anything, correct mismatching data
+        DMsMessageMetadata meta = DMsMessageMetadata::from_metadata(header.metadata);
 
-        std::size_t final_size = sizeof(header);
-        if (replies) final_size += replies.value().size();
-        if (attachments)
-            final_size += attachments.value().size() * sizeof(DMsMessageAttachment);
-        if (payload) final_size += payload.value().data.size();
+        if (!replies) meta.reply = false;
+        if (payload) {
+            meta.length = payload->data.size(); // NOT encoded length
+            meta.length_encoding = this->would_need_long_encoding(); // Change it accordingly
+            if (meta.length_encoding && meta.length > 2040) {
+                payload->data.resize(2040); // Trucate data
+                meta.length = 2040; // Saturated value
+            }
+        }
 
-        output.resize(final_size, 0);
+        if (attachments) {
+
+            // Just clamp and truncate the number of attachments if too many
+            if (attachments->size() > 7) {
+                meta.attachment_count = 7;
+                attachments->resize(7);
+            } else meta.attachment_count = attachments->size();
+
+        } else meta.attachment_count = 0; // Already 0
+
+        header.metadata = meta.to_metadata(); // Write the encoded data back
+
+        // We need to pad the bytes earlier so that the call to size takes them into account
+        if (payload) {
+            if (header.length_encoding())
+                payload->long_encode();
+            else
+                payload->short_encode();
+        }
+
+        // Now we actually serialize
+        std::string output(this->size(), 0);
         char* ptr = output.data();
 
         std::memcpy(ptr, &header, sizeof(header));
         ptr += sizeof(header);
 
         if (replies) {
-            std::string data = replies.value().serialize();
+            std::string data = replies->serialize();
             std::memcpy(ptr, data.data(), data.size());
             ptr += data.size();
         }
 
         if (attachments) {
-            std::size_t bytes = attachments.value().size() * sizeof(attachments.value().front());
-            std::memcpy(ptr, attachments.value().data(), bytes);
+            std::size_t bytes = attachments->size() * sizeof(attachments->front());
+            std::memcpy(ptr, attachments->data(), bytes);
             ptr += bytes;
         }
-
-        if (payload) {
-            if (header.length_encoding())
-                payload.value().long_encode();
-            else
-                payload.value().short_encode();
-
-            std::memcpy(ptr, payload.value().data.data(), payload.value().data.size());
-        }
+    
+        // If we truncated it it still is in range
+        if (payload)
+            std::memcpy(ptr, payload->data.data(), payload->data.size());
 
         return output;
     }

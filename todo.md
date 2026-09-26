@@ -3,23 +3,18 @@
 
 ## Global:
 
-- Update serialization logic across *all* binary formats to syncronize metadata
-  across different child structs (like with `DMsMessage` or `UserFile`) to avoid
-  broken invariants and allowing the caller to avoid doing extra complex encoding
-  calculations
-- Create tests for `User.hpp` and also `Time.hpp` if possible
-- Create more intensive tests for every binary format
-
-## `src/headers/Common.hpp`:
-
-- Make `network_byte_order()` constrained on `std::integral` types and then specialize
-  the template in *each* individual header that defines some binary format to allow
-  converting individual struct fields while keeping a clean API
+- Change the `append_*` functions for binary formats to align
+  data before writing to follow the serialization boundary sanitization
+  mentioned earlier
 
 ## `src/headers/DMs.hpp`:
 
-- Make `derive_context_str()` accept a template or function parameter of type `char`
-  that replaces the interpolation character between strings
+- Add an argument to `convert_dms_file()` of type `std::optional<std::fs::path>`
+  called `opt_new_file` that defaults to `std::nullopt_t`, which would copy the
+  contents of the given `path` parameter to *its* path (checking if it exists
+  and overwriting it based on a fourth `bool` argument called `force_overwrite`,
+  defaulting to `false`) and then changing `path` to the target `opt_new_file`
+  path to seamlessly integrate with the current implementation
 
 ## `docs/WebSocket.md`:
 

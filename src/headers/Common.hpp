@@ -68,6 +68,7 @@ using AttachmentID = std::uint16_t;
         inline constexpr operator name ## _enum () const noexcept /* allow in switch statements */ { \
             return value; \
         } \
+        inline constexpr backing operator+() const noexcept /* unary + */ { return value; } \
         explicit inline constexpr operator bool() const noexcept /* allow in if statements */ { \
             return value != ::ControlZ::name::zero; \
         } \
@@ -201,24 +202,77 @@ std::uint64_t random_number() noexcept {
 template <typename First, typename... Others>
 concept AllSameAs = (std::same_as<First, Others> && ...);
 
-/// @brief Convert in-place the endianness of a value of an arbitrary
+// Forward declarations
+
+template <typename Type>
+inline constexpr void network_byte_order(Type&) noexcept;
+
+template <typename Type>
+inline constexpr Type network_byte_order_copy(const Type&) noexcept;
+
+/// @brief Convert in-place the endianness of a value of an integral
 ///        type if the host is little endian
 /// @tparam Type The type of the value
 /// @param value The value to convert
-template <typename Type>
+template <std::integral Type>
 inline constexpr void network_byte_order(Type& value) noexcept {
     if constexpr (std::endian::native == std::endian::little)
         value = std::byteswap(value); // Maybe `std::move()` this?
 }
 
 /// @brief Return a value with the converted endianness of another value
-///        of an arbitrary type if the host is little endian
+///        of an integral type if the host is little endian
 /// @tparam Type The type of the value
 /// @param value The value to convert
-template <typename Type>
-inline constexpr Type network_byte_order(const Type& value) noexcept {
+template <std::integral Type>
+inline constexpr Type network_byte_order_copy(const Type& value) noexcept {
     if constexpr (std::endian::native == std::endian::little)
         return std::byteswap(value);
+    else
+        return value; // Return something anyways
+}
+
+/// @brief Convert in-place the endianness of an `std::string`'s bytes
+///        if the host is little endian. This can be used on any serialized payload
+/// @param str The string to convert
+template <>
+inline constexpr void network_byte_order(std::string& str) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return;
+    std::size_t size = str.size();
+    for (std::size_t i = 0; i < size; i += 2) {
+        if (i == size - 1) break; // We reached an odd place and we can't swap
+
+        char& bucket1 = str[i];
+        char& bucket2 = str[i + 1];
+        // Old but gold trick
+        bucket1 ^= bucket2;
+        bucket2 ^= bucket1;
+        bucket1 ^= bucket2;
+    }
+}
+
+/// @brief Return a value with the converted endianness of the bytes another
+///        value of type `std::string` if the host is little endian.
+///        This can be used on any serialized payload
+/// @param str The string to convert
+template <>
+inline constexpr std::string network_byte_order_copy(const std::string& str) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return str;
+
+    // Same exact logic as before
+    std::string result = str;
+    std::size_t size = result.size();
+    for (std::size_t i = 0; i < size; i += 2) {
+        if (i == size - 1) break;
+
+        char& bucket1 = result[i];
+        char& bucket2 = result[i + 1];
+        bucket1 ^= bucket2;
+        bucket2 ^= bucket1;
+        bucket1 ^= bucket2;
+    }
+
+    return result;
 }
 
 

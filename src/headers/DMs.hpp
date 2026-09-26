@@ -24,13 +24,13 @@ namespace ControlZ {
 /// @return The concatenated strings
 template <typename... Args>
 requires (AllSameAs<std::string, Args...>)
-inline constexpr std::string derive_context_string(const std::string& x, const Args&... args) {
+inline constexpr std::string derive_context_string(char interpolation_char, const std::string& x, const Args&... args) {
     // Consider allowing a first constexpr parameter or a template
     // parameter to be a `char` value to use for concatenating
     if constexpr (sizeof...(args) == 0) {
         return x;
     } else {
-        return x + (char)255 + derive_context_string(args...);
+        return x + interpolation_char + derive_context_string(interpolation_char, args...);
     }
 }
 
@@ -266,7 +266,7 @@ AppendDMsFileError append_dms_file(const std::fs::path& path, std::string data,
     try {
 
         std::uint64_t filesize = std::fs::file_size(path);
-        if (filesize <= sizeof(DMsHeader))
+        if (filesize < sizeof(DMsHeader)) // If it is equal to the header size we just created the file
             return AppendDMsFileError::FileTooSmall;
 
         DMsHeader header;
@@ -288,12 +288,14 @@ AppendDMsFileError append_dms_file(const std::fs::path& path, std::string data,
                 file.read(reinterpret_cast<char*>(&first_node), sizeof(first_node));
                 first_node.next_node_offset = filesize - sizeof(header);
 
-                file.seekp(0, std::ios::beg);
+                file.seekp(sizeof(header), std::ios::beg);
+                file.write(reinterpret_cast<char*>(&first_node), sizeof(first_node));
             }
 
             // Update the header and write it back
             ++header.node_count;
             header.last_node_addr = filesize; // This case every time
+            file.seekp(0, std::ios::beg);
             file.write(reinterpret_cast<char*>(&header), sizeof(header));
             file.seekp(0, std::ios::end);
 
@@ -408,7 +410,7 @@ std::expected<std::vector<std::string>, DecryptDMsFileError> decrypt_dms_file(
     try {
 
         std::uint64_t filesize = std::fs::file_size(path);
-        if (filesize <= sizeof(DMsHeader))
+        if (filesize < sizeof(DMsHeader)) // If it is the same size it's a new file
             return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::FileTooSmall);
 
         file.seekg(0, std::ios::beg);
@@ -423,7 +425,7 @@ std::expected<std::vector<std::string>, DecryptDMsFileError> decrypt_dms_file(
         if (errors) return std::unexpected<DecryptDMsFileError>(errors);
 
         // Check node ranges
-        if (start_node >= header.node_count)
+        if (start_node > header.node_count) // It would be valid if `max_nodes == 0`
             return std::unexpected<DecryptDMsFileError>(DecryptDMsFileError::InvalidStartNode);
         if (start_node + max_nodes > header.node_count)
             max_nodes = header.node_count - start_node; // Clamp it
@@ -485,8 +487,8 @@ std::expected<std::vector<std::string>, DecryptDMsFileError> decrypt_dms_file(
                 return result; // The caller should use std::move() but maybe RVO does it already
             }
 
-            file.seekg(0, std::ios::beg);
-            std::uint64_t current_node_addr = 0;
+            file.seekg(header.last_node_addr, std::ios::beg);
+            std::uint64_t current_node_addr = header.last_node_addr;
             std::uint64_t data_size = 0;
             std::uint64_t prev_node_addr = filesize;
             DMsNode node;

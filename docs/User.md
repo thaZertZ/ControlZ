@@ -17,8 +17,8 @@ The header is composed of 80 bytes:
 12-43  :  Argon2id password salt
 44-75  :  Argon2id password hash
 76     :  Username length
-77-78  :  Bio length
-79     :  Padding null byte
+77     :  Padding null byte
+78-79  :  Bio length
 ```
 
 And this variadic data follows:

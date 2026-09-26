@@ -144,10 +144,10 @@ struct UserHeader {
     char argon2id_hash[32] = {0};
     /// @brief The length of the username bytes after this header
     std::uint8_t username_len = 0;
-    /// @brief The length of the bio bytes after the username ones
-    std::uint16_t bio_len = 0;
     /// @brief Another padding null byte
     const std::uint8_t padding2 = 0;
+    /// @brief The length of the bio bytes after the username ones
+    std::uint16_t bio_len = 0;
 
     /// @brief Check for broken invariants in a `UserHeader` instance
     /// @return A scoped bitmask enum with the status of the check
@@ -164,6 +164,49 @@ struct UserHeader {
         return errors;
     }
 };
+
+/// @brief Convert in-place the endianness of a `UserHeader` if the host is little endian
+/// @param header The header to convert
+template <>
+inline constexpr void network_byte_order(UserHeader& header) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return;
+
+    // I'm so sorry for this (hardcoded values)
+    const_cast<char*>(header.magic)[0] = 'S';
+    const_cast<char*>(header.magic)[1] = 'U';
+    const_cast<char*>(header.magic)[2] = '\0';
+    *const_cast<std::uint8_t*>(&header.padding1) = 'R';
+
+    // Nice and easy
+    header.user_id = std::byteswap(header.user_id);
+    header.metadata = std::byteswap(header.metadata);
+    header.registration_timestamp = std::byteswap(header.registration_timestamp);
+
+    std::string salt_str(header.argon2id_salt);
+    network_byte_order(salt_str); // Convert it in place (hopefully not ambiguous)
+    std::memcpy(header.argon2id_salt, salt_str.data(), salt_str.size());
+
+    std::string hash_str(header.argon2id_hash);
+    network_byte_order(hash_str); // Same here
+    std::memcpy(header.argon2id_hash, hash_str.data(), hash_str.size());
+
+    *const_cast<std::uint8_t*>(&header.padding2) = header.username_len;
+    header.username_len = 0; // Hardcoded value
+    header.bio_len = std::byteswap(header.bio_len);
+}
+
+/// @brief Return a value with the converted endianness of another value
+///        of type `UserHeader` if the host is little endian
+/// @param header The header to convert
+template <>
+inline constexpr UserHeader network_byte_order_copy(const UserHeader& header) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return header;
+
+    UserHeader result; // Have to do it like this
+    // This should not be ambiguous since we would be calling ourselves but the function isn't fully defined yet
+    network_byte_order(result);
+    return result;
+}
 
 #pragma pack(pop)
 
@@ -185,9 +228,21 @@ struct UserFile {
 
     /// @brief Serialize this object into a string of bytes, adding an
     ///        extra null byte to align to two bytes if needed
-    inline constexpr std::string serialize() const noexcept {
+    inline constexpr std::string serialize() noexcept {
+        // Correct any mismatching data before serializing
+        header.username_len = username.size();
+        header.bio_len = bio.size();
+        // The friends count doesn't exist because we can just subtract byte sizes to calculate it
+        // AWFUL `const_cast`s
+        const_cast<char*>(header.magic)[0] = 'U';
+        const_cast<char*>(header.magic)[1] = 'S';
+        const_cast<char*>(header.magic)[2] = 'R';
+        *const_cast<std::uint8_t*>(&header.padding1) = 0;
+        *const_cast<std::uint8_t*>(&header.padding2) = 0;
+
+        // Resize it from the start
         std::string result(this->size(), '\0');
-        char* ptr = result.data();
+        char* ptr = result.data(); // Keep track of where we are
 
         std::memcpy(ptr, &header, sizeof(header));
         ptr += sizeof(header);
@@ -201,7 +256,7 @@ struct UserFile {
         ptr += bio.size();
 
         if (friends.size() != 0)
-            std::memcpy(ptr, friends.data(), friends.size() * sizeof(UserID));
+            std::memcpy(ptr, friends.data(), friends.size() * sizeof(UserID)); // Remember to use sizeof
 
         return result;
     }
@@ -233,8 +288,12 @@ CONTROLZ_MAKE_SCOPED_ENUM (
 ///                        provided name will be overwritten, else this
 ///                        function will return early
 /// @return A scoped bitmask enum containing errors if they occurred
-CreateUserFileError create_user_file(const std::fs::path& path, const UserFile& data,
+CreateUserFileError create_user_file(const std::fs::path& path, UserFile data,
         bool force_overwrite = false) noexcept {
+
+    // The `data` parameter is taken by value because we may be modifying it inside
+    // this function, so the caller may have modified data once we return, even though
+    // the modified data should have a correct invariants state
 
     CreateUserFileError errors;
 
@@ -323,7 +382,11 @@ inline std::expected<UserFile, DeserializeUserFileError> deserialize_user_file(
 
     if (!std::fs::exists(path)) errors |= DeserializeUserFileError::FileDoesNotExist;
     if (path.extension() != ".usr") errors |= DeserializeUserFileError::InvalidExtension;
-    if (std::fs::file_size(path) % 2 != 0) errors |= DeserializeUserFileError::MisalignedData;
+    // We need to return early because if the file doesn't exist, the call to `file_size()` throws
+    if (errors) return std::unexpected<DeserializeUserFileError>(errors);
+
+    std::size_t filesize = std::fs::file_size(path); // Also used later
+    if (filesize % 2 != 0) errors |= DeserializeUserFileError::MisalignedData;
 
     std::ifstream file(path, std::ios::binary);
     if (!file) return std::unexpected<DeserializeUserFileError>(DeserializeUserFileError::FileFatal);
@@ -363,8 +426,8 @@ inline std::expected<UserFile, DeserializeUserFileError> deserialize_user_file(
         std::size_t current_size = sizeof(UserHeader) +
             data.header.username_len + data.header.bio_len;
         // This means we have a friends list
-        if (data.size() != current_size) {
-            data.friends.resize(data.size() - current_size, 0);
+        if (filesize != current_size) {
+            data.friends.resize((filesize - current_size) / sizeof(UserID), 0); // Remember to divide by the size of `UserID`!!
 
             file.read(reinterpret_cast<char*>(data.friends.data()),
                 data.friends.size() * sizeof(UserID));
