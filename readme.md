@@ -34,6 +34,17 @@ partial progress has been made:
 
 More elements may be added to this list in the future.
 
+## Dependencies
+
+| Name           | Used/planned       |
+| -------------- | ------------------ |
+| `cpp-httplib`  | Added but not used |
+| `Dear ImGui`   | Planned            |
+| `P-H-C Argon2` | Planned            |
+| `libconfini`   | Planned            |
+
+Dependencies will need to be added with git submodules.
+
 ## Contributions
 
 Contributions to this project are more than welcome,
