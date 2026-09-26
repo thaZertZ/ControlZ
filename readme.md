@@ -19,7 +19,7 @@ partial progress has been made:
 - [x] Design the file formats the application is
   going to deal with
 - [x] Implement these formats
-- [x] Test these formats (soon to be committed)
+- [x] Test these formats
 - [x] Design the networking API for communication
 - [ ] Implement this API
 - [ ] Test this API
