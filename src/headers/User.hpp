@@ -64,30 +64,38 @@ struct UserHeaderMetadata {
     /// @brief The format version
     std::uint8_t version = 0;
     /// @brief The moderation level
-    std::uint8_t mod_level = 0;
+    ModLevel mod_level = ModLevel::Normal;
     /// @brief The policy that users should follow to read this user's bio
-    std::uint8_t bio_policy = 0;
+    UserPolicy bio_policy = UserPolicy::NoOne;
     /// @brief The policy that users should follow to read this user's friend list
-    std::uint8_t friends_policy = 0;
+    UserPolicy friends_policy = UserPolicy::NoOne;
     /// @brief The status of this user's account
-    std::uint8_t user_status = 0;
+    UserStatus user_status = UserStatus::Active;
+    /// @brief The policy that users should follow to send friend requests to this user
+    UserPolicy friend_req_policy = UserPolicy::NoOne;
+    /// @brief The policy that users should follow to send messages to this user
+    UserPolicy exchange_policy = UserPolicy::NoOne;
 
     /// @brief Pack this struct into a valid metadata field for a `UserHeader`
     inline constexpr std::uint16_t to_metadata() const noexcept {
         /*
         F E D C B A 9 8 7 6 5 4 3 2 1 0
         -------------------------------
-        v v v m m i i r r s s x x x x x
+        v v v m m i i r r s s q q p p x
 
         v  :  Version number
         m  :  Moderation level
         i  :  Bio policy
         r  :  Friends list policy
         s  :  User status
+        q  :  Friend request policy
+        p  :  Message exchange policy
         x  :  Reserved for future use
         */
 
         std::uint16_t result = 0;
+        result |= exchange_policy << 0x1;
+        result |= friend_req_policy << 0x3;
         result |= user_status << 0x5;
         result |= friends_policy << 0x7;
         result |= bio_policy << 0x9;
@@ -100,11 +108,13 @@ struct UserHeaderMetadata {
     /// @param meta The metadata field
     static inline constexpr UserHeaderMetadata from_metadata(std::uint16_t meta) noexcept {
         return {
-            .version        = (std::uint8_t) (meta >> 0xD),
-            .mod_level      = (std::uint8_t)((meta >> 0xB) & 0b11),
-            .bio_policy     = (std::uint8_t)((meta >> 0x9) & 0b11),
-            .friends_policy = (std::uint8_t)((meta >> 0x7) & 0b11),
-            .user_status    = (std::uint8_t)((meta >> 0x5) & 0b11)
+            .version           = (std::uint8_t) (meta >> 0xD),
+            .mod_level         = (std::uint8_t)((meta >> 0xB) & 0b11),
+            .bio_policy        = (std::uint8_t)((meta >> 0x9) & 0b11),
+            .friends_policy    = (std::uint8_t)((meta >> 0x7) & 0b11),
+            .user_status       = (std::uint8_t)((meta >> 0x5) & 0b11),
+            .friend_req_policy = (std::uint8_t)((meta >> 0x3) & 0b11),
+            .exchange_policy   = (std::uint8_t)((meta >> 0x1) & 0b11)
         };
     }
 };
@@ -444,6 +454,311 @@ inline std::expected<UserFile, DeserializeUserFileError> deserialize_user_file(
 
     } catch (...) {
         return std::unexpected<DeserializeUserFileError>(DeserializeUserFileError::Exception);
+    }
+}
+
+
+/// @brief A scoped bitmask enum returned when creating a friend request mapping file
+CONTROLZ_MAKE_SCOPED_ENUM (
+    CreateFriendFileError, // Type name
+    std::uint8_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
+
+    // Enum values
+    OK                = 0,
+    InvalidExtension  = 1 << 0,
+    FileAlreadyExists = 1 << 1,
+    FileFatal         = 1 << 2,
+    FileNonFatal      = 1 << 3,
+    Exception         = 1 << 4
+)
+
+/// @brief Create a friend request mapping file
+/// @param path The path to the file
+/// @param force_overwrite If set to `true` any existing file with
+///                        the provided name will be overwritten
+/// @return A scoped bitmask enum containing errors if they occurred
+[[nodiscard]]
+CreateFriendFileError create_friend_file(const std::fs::path& path, bool force_overwrite = false) noexcept {
+    CreateFriendFileError errors;
+
+    if (std::fs::exists(path) && !force_overwrite) errors |= CreateFriendFileError::FileAlreadyExists;
+    if (path.extension() != ".bin") errors |= CreateFriendFileError::InvalidExtension;
+
+    if (errors) return errors;
+
+    std::ofstream file(path, std::ios::binary);
+    if (!file) return CreateFriendFileError::FileFatal;
+    file.exceptions(std::ios::badbit | std::ios::failbit);
+
+    try {
+
+        file.seekp(0, std::ios::beg);
+
+        UserID a = 0;
+        UserID b = 0;
+
+        file.write(reinterpret_cast<char*>(&a), sizeof(a));
+        file.write(reinterpret_cast<char*>(&b), sizeof(b));
+
+    } catch (const std::ios::failure&) {
+
+        if (file.bad())
+            return CreateFriendFileError::FileFatal;
+        else
+            return CreateFriendFileError::FileNonFatal;
+
+    } catch (...) {
+        return CreateFriendFileError::Exception;
+    }
+
+    return CreateFriendFileError::OK;
+}
+
+/// @brief a scoped bitmask enum returned when adding a pair to friend request mapping file
+CONTROLZ_MAKE_SCOPED_ENUM (
+    AddFriendFileError, // Type name
+    std::uint8_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
+
+    // Enum values
+    OK               = 0,
+    FileDoesNotExist = 1 << 0,
+    InvalidExtension = 1 << 1,
+    MisalignedData   = 1 << 2,
+    FileFatal        = 1 << 3,
+    FileNonFatal     = 1 << 4,
+    Exception        = 1 << 5
+)
+
+/// @brief Add a pair to friend request mapping file
+/// @param path The path to the file
+/// @param a The first user in the pair
+/// @param b The second user in the pair
+/// @return A scoped bitmask enum containing errors if they occurred
+[[nodiscard]]
+AddFriendFileError add_friend_file(const std::fs::path& path, UserID a, UserID b) noexcept {
+
+    AddFriendFileError errors;
+    std::size_t filesize = 0;
+
+    if (!std::fs::exists(path)) errors |= AddFriendFileError::FileDoesNotExist;
+    else { // Only if it exists
+        // Check if the size is a multiple of the double size of `UserID` (because of pairs)
+        filesize = std::fs::file_size(path);
+        if (filesize % (sizeof(UserID) * 2) != 0)
+            errors |= AddFriendFileError::MisalignedData;
+    }
+    if (path.extension() != ".bin") errors |= AddFriendFileError::InvalidExtension;
+
+    if (errors) return errors;
+
+    std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+    if (!file) return AddFriendFileError::FileFatal;
+    file.exceptions(std::ios::badbit | std::ios::failbit);
+
+    try {
+
+        file.seekg(0, std::ios::beg);
+        bool written = false;
+        std::size_t pairs = filesize / (sizeof(UserID) * 2);
+
+        // Step through pairs
+        for (std::size_t i = 0; i < pairs; ++i) {
+            UserID x = 0;
+            UserID y = 0;
+            file.read(reinterpret_cast<char*>(&x), sizeof(x));
+            file.read(reinterpret_cast<char*>(&y), sizeof(y));
+
+            if (x == 0 && y == 0) {
+                // Go back
+                file.seekp(-(sizeof(UserID) * 2), std::ios::cur);
+
+                file.write(reinterpret_cast<char*>(&a), sizeof(a));
+                file.write(reinterpret_cast<char*>(&b), sizeof(b));
+
+                written = true;
+                break;
+            }
+        }
+
+        // If we didn't find an empty pair we write one now
+        if (!written) {
+            file.seekp(0, std::ios::end);
+            file.write(reinterpret_cast<char*>(&a), sizeof(a));
+            file.write(reinterpret_cast<char*>(&b), sizeof(b));
+        }
+
+    } catch (const std::ios::failure&) {
+
+        if (file.bad())
+            return AddFriendFileError::FileFatal;
+        else
+            return AddFriendFileError::FileNonFatal;
+
+    } catch (...) {
+        return AddFriendFileError::Exception;
+    }
+
+    return AddFriendFileError::OK;
+}
+
+/// @brief A scoped bitmask enum returned when accepting a pair of a friend request mapping file
+CONTROLZ_MAKE_SCOPED_ENUM (
+    AcceptFriendFileError, // Type name
+    std::uint8_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
+
+    // Enum values
+    OK               = 0,
+    FileDoesNotExist = 1 << 0,
+    InvalidExtension = 1 << 1,
+    MisalignedData   = 1 << 2,
+    PairNotFound     = 1 << 3,
+    FileFatal        = 1 << 4,
+    FileNonFatal     = 1 << 5,
+    Exception        = 1 << 6
+)
+
+/// @brief Accept a pair of a friend request mapping file
+/// @param path The path to the file
+/// @param a The first user in the pair
+/// @param b The second user in the pair
+/// @return A scoped bitmask enum containing errors if they occurred
+[[nodiscard]]
+AcceptFriendFileError accept_friend_file(const std::fs::path& path, UserID a, UserID b) noexcept {
+
+    AcceptFriendFileError errors;
+    std::size_t filesize = 0;
+
+    if (!std::fs::exists(path)) errors |= AcceptFriendFileError::FileDoesNotExist;
+    else { // Only if it exists
+        filesize = std::fs::file_size(path);
+        if (filesize % (sizeof(UserID) * 2) != 0)
+            errors |= AcceptFriendFileError::MisalignedData;
+    }
+    if (path.extension() != ".bin") errors |= AcceptFriendFileError::InvalidExtension;
+
+    if (errors) return errors;
+
+    std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+    if (!file) return AcceptFriendFileError::FileFatal;
+    file.exceptions(std::ios::badbit | std::ios::failbit);
+
+    try {
+
+        file.seekg(0, std::ios::beg);
+        bool written = false;
+        std::size_t pairs = filesize / (sizeof(UserID) * 2);
+
+        for (std::size_t i = 0; i < pairs; ++i) {
+            UserID x = 0;
+            UserID y = 0;
+            file.read(reinterpret_cast<char*>(&x), sizeof(x));
+            file.read(reinterpret_cast<char*>(&y), sizeof(y));
+
+            if (x == a && y == b) {
+                // Go back
+                file.seekp(-(sizeof(UserID) * 2), std::ios::cur);
+
+                // Write all zeroes
+                file.write("\0\0\0\0", sizeof(UserID) * 2);
+                written = true;
+                break;
+            }
+        }
+
+        if (!written) return AcceptFriendFileError::PairNotFound;
+
+    } catch (const std::ios::failure&) {
+
+        if (file.bad())
+            return AcceptFriendFileError::FileFatal;
+        else
+            return AcceptFriendFileError::FileNonFatal;
+
+    } catch (...) {
+        return AcceptFriendFileError::Exception;
+    }
+
+    return AcceptFriendFileError::OK;
+}
+
+/// @brief A scoped bitmask enum returned when deserializing a friend request mapping file
+CONTROLZ_MAKE_SCOPED_ENUM (
+    DeserializeFriendFileError, // Type name
+    std::uint8_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
+
+    // Enum values
+    OK               = 0,
+    FileDoesNotExist = 1 << 0,
+    InvalidExtension = 1 << 1,
+    MisalignedData   = 1 << 2,
+    FileFatal        = 1 << 3,
+    FileNonFatal     = 1 << 4,
+    Exception        = 1 << 5,
+)
+
+/// @brief Deserialize a friend request mapping file
+/// @param path The path to the file
+/// @param keep_empty_slots If set to `true`, empty pairs in the file
+///                         will be kept in the returned vector
+/// @return A vector of pairs of `UserID`s or a scoped bitmask enum
+///         containing errors if they occurred
+[[nodiscard]]
+std::expected<std::vector<std::pair<UserID, UserID>>, DeserializeFriendFileError> deserialize_friend_file(
+        const std::fs::path& path, bool keep_empty_slots = false) noexcept {
+
+    DeserializeFriendFileError errors;
+    std::size_t filesize = 0;
+
+    if (!std::fs::exists(path)) errors |= DeserializeFriendFileError::FileDoesNotExist;
+    else { // Only if it exists
+        filesize = std::fs::file_size(path);
+        if (filesize % (sizeof(UserID) * 2) != 0)
+            errors |= DeserializeFriendFileError::MisalignedData;
+    }
+    if (path.extension() != ".bin") errors |= DeserializeFriendFileError::InvalidExtension;
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return std::unexpected<DeserializeFriendFileError>(DeserializeFriendFileError::FileFatal);
+    file.exceptions(std::ios::badbit | std::ios::failbit);
+
+    try {
+
+        file.seekg(0, std::ios::beg);
+
+        std::size_t pairs = filesize / (sizeof(UserID) * 2);
+        std::vector<std::pair<UserID, UserID>> result(pairs, {0, 0});
+
+        std::size_t index = 0; // The real index into the vector
+        for (std::size_t i = 0; i < pairs; ++i) {
+            std::pair<UserID, UserID> current = {0, 0};
+            file.read(reinterpret_cast<char*>(&current), sizeof(current));
+
+            if (keep_empty_slots || (current.first != 0 && current.second != 0))
+                result[index] = current; // We only write to it if we say so or if they are not 0
+
+            ++index;
+        }
+
+        result.shrink_to_fit();
+        return result;
+
+    } catch (const std::ios::failure&) {
+
+        if (file.bad())
+            return std::unexpected<DeserializeFriendFileError>(DeserializeFriendFileError::FileFatal);
+        else
+            return std::unexpected<DeserializeFriendFileError>(DeserializeFriendFileError::FileNonFatal);
+
+    } catch (...) {
+        return std::unexpected<DeserializeFriendFileError>(DeserializeFriendFileError::Exception);
     }
 }
 

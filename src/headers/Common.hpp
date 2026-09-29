@@ -9,11 +9,13 @@
 namespace ControlZ {
 
 
-/// @brief Alias for a UserID (16bit unsigned integer)
+/// @brief Alias for a `UserID` (16bit unsigned integer)
 using UserID = std::uint16_t;
-/// @brief Alias for a custom Timestamp in seconds (32bit unsigned integer)
+/// @brief Alias for a `ChatID` (32bit unsigned integer)
+using ChatID = std::uint32_t;
+/// @brief Alias for a custom timestamp in seconds (32bit unsigned integer)
 using Timestamp = std::uint32_t;
-/// @brief Alias for an AttachmentID (16bit unsigned integer)
+/// @brief Alias for an `AttachmentID` (16bit unsigned integer)
 using AttachmentID = std::uint16_t;
 
 /// @brief Create a scoped enum type with comparison operator overloads and utility methods
@@ -35,6 +37,7 @@ using AttachmentID = std::uint16_t;
         name() noexcept = default; \
         ~name() noexcept = default; \
         constexpr name(name ## _enum x) noexcept : value(x) /* construct out of the internal enum */ {} \
+        constexpr name(backing x) noexcept : value(static_cast<name ## _enum>(x)) /* construct out of the backing type */ {} \
         inline constexpr name operator|(name other) const noexcept /* OR two values */ { \
             return name(static_cast<name ## _enum>(value | other.value)); \
         } \

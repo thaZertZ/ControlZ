@@ -34,10 +34,17 @@ int main() {
     REQUIRE(forward->size() == 2); // 2 messages total
     REQUIRE((*forward)[0] == std::string("first!", 6));
     REQUIRE((*forward)[1] == "second"); // Expect values
-    REQUIRE(convert_dms_file(path, true) == ConvertDMsFileError::OK); // To backward-linked
+    // To backward-linked and a new file
+    std::fs::path path2 = path;
+    path2.concat("_conv.dm");
+    REQUIRE(convert_dms_file(path, true, std::make_optional(path2)) == ConvertDMsFileError::OK);
+    REQUIRE(convert_dms_file(path, true) == ConvertDMsFileError::OK); // Regular in-place conversion
 
     auto backward = decrypt_dms_file(path, "alice|bob");
+    auto backward2 = decrypt_dms_file(path2, "alice|bob");
     REQUIRE(backward.has_value());
+    REQUIRE(backward2.has_value());
+    REQUIRE(backward.value() == backward2.value()); // Expect them to be the same
     REQUIRE(backward->size() == 2);
     REQUIRE((*backward)[0] == "second"); // Expect values in reverse order
     REQUIRE((*backward)[1] == std::string("first!", 6));
@@ -47,6 +54,7 @@ int main() {
 
     // Clean up
     ControlZTests::remove_if_present(path);
+    ControlZTests::remove_if_present(path2);
 
     return 0;
 }

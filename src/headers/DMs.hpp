@@ -546,31 +546,50 @@ CONTROLZ_MAKE_SCOPED_ENUM (
     OK, // Zero value
 
     // Enum values
-    OK                  = 0,
-    FileTooSmall        = 1 << 0,
-    InvalidMagic        = 1 << 1,
-    InvalidVersion      = 1 << 2,
-    InvalidConfig       = 1 << 3,
-    InvalidLastNodeAddr = 1 << 4,
-    InvalidExtension    = 1 << 5,
-    FileDoesNotExist    = 1 << 6,
-    TargetTypeIsCurrent = 1 << 7,
-    FileFatal           = 1 << 8,
-    FileNonFatal        = 1 << 9,
-    Exception           = 1 << 10
+    OK                     = 0,
+    FileTooSmall           = 1 << 0,
+    InvalidMagic           = 1 << 1,
+    InvalidVersion         = 1 << 2,
+    InvalidConfig          = 1 << 3,
+    InvalidLastNodeAddr    = 1 << 4,
+    InvalidExtension       = 1 << 5,
+    InvalidTargetExtension = 1 << 6,
+    FileDoesNotExist       = 1 << 7,
+    TargetAlreadyExists    = 1 << 8,
+    TargetTypeIsCurrent    = 1 << 9,
+    FileFatal              = 1 << 10,
+    FileNonFatal           = 1 << 11,
+    Exception              = 1 << 12
 )
 
 /// @brief Convert a DMs file to a target linking type
 /// @param path The path to the file
 /// @param target_linking_type The linking type to convert the file to
+/// @param opt_new_file The optional name of the new file to write the converted data to,
+///                     if this is `std::nullopt`, the file will be converted in-place
+/// @param force_overwrite If this is set to `true` and a file with the name of `opt_new_file`
+///                        is found, that file is replaced, otherwise this function returns early
 /// @return An enum bitmask with one or more errors that occurred during the operation
 [[nodiscard]]
-ConvertDMsFileError convert_dms_file(const std::fs::path& path, bool target_linking_type) noexcept {
+ConvertDMsFileError convert_dms_file(std::fs::path path, bool target_linking_type,
+        std::optional<std::fs::path> opt_new_file = std::nullopt, bool force_overwrite = false) noexcept {
 
     ConvertDMsFileError errors;
 
     if (!std::fs::exists(path)) return ConvertDMsFileError::FileDoesNotExist;
     if (path.extension() != ".dm") return ConvertDMsFileError::InvalidExtension;
+
+    if (opt_new_file) {
+        const std::fs::path new_path = *opt_new_file;
+
+        // We first perform checks
+        if (std::fs::exists(new_path) && !force_overwrite) return ConvertDMsFileError::TargetAlreadyExists;
+        if (new_path.extension() != ".dm") return ConvertDMsFileError::InvalidTargetExtension;
+
+        // Then copy the file contents and also the path value so we can operate seamlessly
+        std::fs::copy_file(path, new_path, force_overwrite ? std::fs::copy_options::overwrite_existing : std::fs::copy_options::none);
+        path = new_path; // Copy the value there
+    }
 
     std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
     if (!file) return ConvertDMsFileError::FileFatal;

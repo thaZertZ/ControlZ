@@ -69,17 +69,18 @@ x  :  Reserved for future use
 
 ## Packet types
 
-| Name       | Description                                         |
-| ---------- | --------------------------------------------------- |
-| `Auth`     | Authenticate a user                                 |
-| `Deauth`   | Deauthenticate a user                               |
-| `DM`       | Send a private message to a user                    |
-| `Download` | Download a file from the server                     |
-| `InfoChat` | Request information about a public chat             |
-| `InfoUser` | Request information about a user                    |
-| `Send`     | Send a public message in a chat                     |
-| `Update`   | Send new session information like incoming messages |
-| `Upload`   | Upload a file to the server                         |
+| Name           | Description                                         |
+| -------------- | --------------------------------------------------- |
+| `Auth`         | Authenticate a user                                 |
+| `Deauth`       | Deauthenticate a user                               |
+| `DM`           | Send a private message to a user                    |
+| `Download`     | Download a file from the server                     |
+| `InfoChat`     | Request information about a public chat             |
+| `InfoUser`     | Request information about a user                    |
+| `ManageFriend` | Manage a friend request                             |
+| `Send`         | Send a public message in a chat                     |
+| `Update`       | Send new session information like incoming messages |
+| `Upload`       | Upload a file to the server                         |
 
 Here the individual packet payloads will be covered.
 
@@ -130,14 +131,15 @@ The response only contains an acknowledgement.
 **Recipient UserID**: the UserID of the user receiving the message
 **Raw DMsMessage data**: message data serialized directly from a DMsMessage object
 
-This packet expects an acknowledgement.
+This packet expects an acknowledgement.  
+A negative acknowledgement means that the file was not able to be written to disk.
 
 #### Response
 
 The response only contains an acknowledgement.
 
 If a negative acknowledgement is sent, the sender of the request packet must resend
-again the same packet, also conserving the same **sequence ID**.
+again the same packet, also keeping the same **sequence ID**.
 
 ### `Download`
 
@@ -206,7 +208,28 @@ whole process repeats.
 - **ChatID**: the ChatID of the chat to get information about
 
 This packet expects an acknowledgement attached to a response, if a negative
-acknowledgement is received, the response should not hold any data.
+acknowledgement is received, the response should not hold any data.  
+The negative acknowledgement means that the **ChatID** field was invalid.
+
+#### Response
+
+```
+0    :  Policy bitmask
+1    :  Name length
+2-3  :  Description length
+---  :  Name
+---  :  Description
+---  :  Members list
+```
+
+- **Policy bitmask**: a bitmask containing information about which fields are
+  allowed to be read. The ones that aren't will hold a value of `0`
+- **Name length**: the length in bytes of the **name** field
+- **Description length**: the length in bytes of the **description** field
+- **Name**: the raw characters of the chat's name. Can be at most 40 characters
+- **Description**: the raw characters of the chat's description. Can be at most
+  4000 characters
+- **Members list**: the list of members inside the chat
 
 ### `InfoUser`
 
@@ -219,17 +242,104 @@ acknowledgement is received, the response should not hold any data.
 - **Target UserID**: the UserID to get information about
 
 This packet expects an acknowledgement attached to a response, if a negative
-acknowledgement is received, the response should not hold any data.
+acknowledgement is received, the response should not hold any data.  
+The negative acknowledgement means that the **Target UserID** field was invalid.
 
 #### Response
 
-<!--
-make this when the user format will be done,
-only allow some information to be transmitted
--->
+```
+0-3  :  Registration timestamp
+4    :  Policy bitmask
+5    :  Username length
+6-7  :  Bio length
+---  :  Username
+---  :  Bio
+---  :  Friends list
+```
+
+- **Registration timestamp**: a timestamp in seconds from a custom epoch on
+  1/1/2027 at 00:00 UTC at which the user was registered
+- **Policy bitmask**: a bitmask containing information about which fields
+  are allowed to be read. The ones that aren't will hold a value of `0`
+- **Username length**: the number of bytes occupied by the **username** field
+- **Bio length**: the number of bytes occupied by the **bio** field
+- **Username**: the raw characters of the user's username
+- **Bio**: the raw characters of the user's biography
+- **Friends list**: a variadic list of `UserID`s corresponding to that user's
+  friends
+
+This is the structure of the **policy bitmask** field:
 
 ```
-WIP
+7 6 5 4 3 2 1 0
+---------------
+x x x q q u b l
+
+q  :  Friend request policy
+u  :  Username flag
+b  :  Bio flag
+l  :  Friends list flag
+x  :  Reserved for future use
 ```
 
-- **WIP**: WIP
+- **Friend request policy**: mirrors the **friend request policy** field of the user
+  binary file format, found [here](./User.md#format-header)
+- **Username flag**: whether the user can read the requested username
+- **Bio flag**: whether the user can read the requested bio
+- **Friends list flag**: whether the user can read the requested friends list
+
+### `ManageFriend`
+
+```
+0-1  :  UserID
+2-3  :  Target UserID
+4    :  Action
+5    :  Padding null byte
+```
+
+- **Sender UserID**: the `UserID` of the user sending this packet
+- **Target UserID**: the `UserID` of the friend
+- **Action**: a value representing which action to perform on the specified user.
+  `0` = request if it is a friend, `1` = send friend request,
+  `2` = accept friend request, `3` = remove friend
+
+This packet expects an acknowledgement, if a negative acknowledgement is received,
+it means that the friend request could not be sent (if **action** was `1`)
+because the user didn't allow friend requests, or because the **Target UserID**
+field was invalid.  
+If **action** was `0` it means that the target user is not a
+friend of this user.  
+Other values of **action** require an acknowledgement.
+
+When a friend request is sent, the server writes it in a `.bin` file that holds
+pairs of `UserID`s: the `UserID` of the sender and the target `UserID`.  
+Once a friend request has been accepted, the pair is replaced with zeroes ready
+to be used again for other requests.
+
+### `Send`
+
+```
+0-3  :  ChatID
+---  :  Raw DMsMessage data
+```
+
+- **ChatID**: the `ChatID` of the chat to send the message to
+- **Raw DMsMessage data**: message data serialized directly from a DMsMessage object
+
+This packet expects an acknowledgement.  
+A negative acknowledgement means that the file was not able to be written to disk.
+
+#### Response
+
+The response only contains an acknowledgement.
+
+If a negative acknowledgement is sent, the sender of the request packet must resend
+again the same packet, also keeping the same **sequence ID**.
+
+### `Update`
+
+```
+
+```
+
+### `Upload`

@@ -14,7 +14,8 @@ int main() {
         .mod_level = 3,
         .bio_policy = 2,
         .friends_policy = 1,
-        .user_status = 1
+        .user_status = 1,
+        .exchange_policy = 1
     };
     // Perform integrity checks across encoding and decoding
     const auto decoded_metadata = UserHeaderMetadata::from_metadata(metadata.to_metadata());
@@ -23,6 +24,7 @@ int main() {
     REQUIRE(decoded_metadata.bio_policy == 2);
     REQUIRE(decoded_metadata.friends_policy == 1);
     REQUIRE(decoded_metadata.user_status == 1);
+    REQUIRE(decoded_metadata.exchange_policy == 1);
 
     // Make up some data
     UserFile original {
@@ -60,8 +62,24 @@ int main() {
     REQUIRE(deserialize_user_file(ControlZTests::temp_path("missing.usr")).error() ==
         DeserializeUserFileError::FileDoesNotExist);
 
+    // Test friend request mapping files
+    const auto fpath = ControlZTests::temp_path("friends.bin");
+    REQUIRE(create_friend_file(fpath) == CreateFriendFileError::OK);
+    REQUIRE(add_friend_file(fpath, 123, 456) == AddFriendFileError::OK);
+    REQUIRE(add_friend_file(fpath, 69, 42) == AddFriendFileError::OK);
+    REQUIRE(accept_friend_file(fpath, 123, 456) == AcceptFriendFileError::OK);
+
+    auto friends = deserialize_friend_file(fpath, true);
+    REQUIRE(friends.has_value());
+    REQUIRE(friends.value().size() == 2); // We kept empty slots
+    bool temp = friends.value()[0] == std::pair<UserID, UserID>(0, 0);
+    REQUIRE(temp); // The empty slot
+    temp = friends.value()[1] == std::pair<UserID, UserID>(69, 42);
+    REQUIRE(temp); // The non-empty slot
+
     // Clean up
     ControlZTests::remove_if_present(path);
+    ControlZTests::remove_if_present(fpath);
 
     return 0;
 }

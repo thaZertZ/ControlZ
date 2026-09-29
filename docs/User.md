@@ -49,13 +49,15 @@ This is the structure of the **user metadata and policies** field:
 ```
 F E D C B A 9 8 7 6 5 4 3 2 1 0
 -------------------------------
-v v v m m i i r r s s x x x x x
+v v v m m i i r r s s q q p p x
 
 v  :  Version number
 m  :  Moderation level
 i  :  Bio policy
 r  :  Friends list policy
 s  :  User status
+q  :  Friend request policy
+p  :  Message exchange policy
 x  :  Reserved for future use
 ```
 
@@ -68,3 +70,8 @@ x  :  Reserved for future use
   friend list. The values are the same as the **bio policy** field
 - **User status**: indicate the status of this user's account. `00` = active, `01` =
   warned, `10` = suspended, `11` = banned
+- **Friend request policy**: indicate which users should be able to send friend
+  requests to this user. `00` = no one, `01` = reserved value, `10` = mutual chat
+  members, `11` = anyone
+- **Message exchange policy**: indicate which users should be able to send messages
+  to this user. The values are the same as the **bio policy** field
