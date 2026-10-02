@@ -1,10 +1,10 @@
 
 # ControlZ
 
-ControlZ is a custom-made chat application
+ControlZ is a custom-made chat application template
 and an ambitious project that originated from
-the need to keep any citizen's privacy intact from
-some of the new regulations that the EU government
+the need to inevitably contrast
+some new online-privacy regulations that the EU government
 wants to let pass, better known as **Chatcontrol 2.0**.
 
 ControlZ targets both beefy machines and small servers.  
