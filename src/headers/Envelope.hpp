@@ -94,6 +94,10 @@ struct DMsMessageMetadata {
             ((length + 3) / 4) * 4   // Short encoding
         );
     }
+
+    inline constexpr bool operator==(const DMsMessageMetadata& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(other)) == 0;
+    }
 };
 
 #pragma pack(push, 1)
@@ -123,6 +127,10 @@ struct DMsMessageHeader {
     /// @brief Return the length encoding held by the `metadata` field
     inline constexpr bool length_encoding() const noexcept {
         return DMsMessageMetadata::from_metadata(metadata).length_encoding; // Shorter way
+    }
+
+    inline constexpr bool operator==(const DMsMessageHeader& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(other)) == 0;
     }
 };
 
@@ -205,6 +213,11 @@ struct DMsMessageReplies {
 
         return result;
     }
+
+    inline constexpr bool operator==(const DMsMessageReplies& other) const noexcept {
+        return reply_count == other.reply_count &&
+            padding_null_byte == other.padding_null_byte && timestamps == other.timestamps;
+    }
 };
 
 #pragma pack(push, 1)
@@ -219,6 +232,10 @@ struct DMsMessageAttachment {
     ///        a client must ask the server for the original extension of the file,
     ///        contained in a mapping file
     FileExtension extension = FileExtension::None;
+
+    inline constexpr bool operator==(const DMsMessageAttachment& other) const noexcept {
+        return id == other.id && extension == other.extension;
+    }
 };
 
 /// @brief Convert in-place the endianness of a `DMsMessageAttachment` if the host is little endian
@@ -261,6 +278,10 @@ struct DMsMessagePayload {
         std::uint8_t exceeding = data.size() % 8;
         if (exceeding == 0) return;
         data.append(8 - exceeding, '\0');
+    }
+
+    inline constexpr bool operator==(const DMsMessagePayload& other) const noexcept {
+        return data == other.data;
     }
 };
 
@@ -368,6 +389,16 @@ struct DMsMessage {
             std::memcpy(ptr, payload->data.data(), payload->data.size());
 
         return output;
+    }
+
+    inline constexpr bool operator==(const DMsMessage& other) const noexcept {
+        return header == other.header &&
+            ((replies.has_value() && other.replies.has_value()) ?
+                *replies == *other.replies : false) &&
+            ((attachments.has_value() && other.attachments.has_value()) ?
+                *attachments == *other.attachments : false) &&
+            ((payload.has_value() && other.payload.has_value()) ?
+                *payload == *other.payload : false);
     }
 };
 

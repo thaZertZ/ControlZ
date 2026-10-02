@@ -54,6 +54,10 @@ struct ChatHeaderMetadata {
             .members_flag      =               (meta &  1        ) != 0,
         };
     }
+
+    inline constexpr bool operator==(const ChatHeaderMetadata& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(other)) == 0;
+    }
 };
 
 /// @brief A scoped bitmask enum returned when verifying the
@@ -90,7 +94,7 @@ struct ChatHeader {
     inline constexpr ChatHeaderVerifyError verify() const noexcept {
         ChatHeaderVerifyError errors;
 
-        if (magic[0] != 'C' || magic[1] != 'H' || magic[2] != 'A' || magic[3] != 'T')
+        if (std::memcmp("CHAT", magic, sizeof(magic)) != 0)
             errors |= ChatHeaderVerifyError::InvalidMagic;
         if (ChatHeaderMetadata::from_metadata(metadata).version != 0)
             errors |= ChatHeaderVerifyError::InvalidVersion;
@@ -98,6 +102,10 @@ struct ChatHeader {
             errors |= ChatHeaderVerifyError::InvalidChatID;
 
         return errors;
+    }
+
+    inline constexpr bool operator==(const ChatHeader& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(other)) == 0;
     }
 };
 
@@ -129,10 +137,7 @@ struct ChatFile {
     ///        that can be directly written to a file
     inline constexpr std::string serialize() noexcept {
         // Fix invariants (eww)
-        const_cast<char*>(header.magic)[0] = 'C';
-        const_cast<char*>(header.magic)[1] = 'H';
-        const_cast<char*>(header.magic)[2] = 'A';
-        const_cast<char*>(header.magic)[3] = 'T';
+        std::strncpy(const_cast<char*>(header.magic), "CHAT", sizeof(header.magic));
 
         // Fix the metadata
         ChatHeaderMetadata meta = ChatHeaderMetadata::from_metadata(header.metadata);
@@ -167,6 +172,12 @@ struct ChatFile {
             std::memcpy(ptr, pswd_data->data(), 64);
 
         return result;
+    }
+
+    inline constexpr bool operator==(const ChatFile& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(header)) == 0 && name == other.name &&
+            description == other.description && members == other.members &&
+            ((pswd_data.has_value() && other.pswd_data.has_value()) ? *pswd_data == *other.pswd_data : false);
     }
 };
 

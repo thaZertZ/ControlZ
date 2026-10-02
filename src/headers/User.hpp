@@ -117,6 +117,10 @@ struct UserHeaderMetadata {
             .exchange_policy   = (std::uint8_t)((meta >> 0x1) & 0b11)
         };
     }
+
+    inline constexpr bool operator==(const UserHeaderMetadata& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(other)) == 0;
+    }
 };
 
 /// @brief A scoped bitmask enum returned when verifying the integrity of a `UserHeader`
@@ -164,7 +168,7 @@ struct UserHeader {
     inline constexpr VerifyUserHeaderError verify() const noexcept {
         VerifyUserHeaderError errors;
 
-        if (magic[0] != 'U' || magic[1] != 'S' || magic[2] != 'R')
+        if (std::memcmp("USR", magic, sizeof(magic)) != 0)
             errors |= VerifyUserHeaderError::InvalidMagic;
         if (UserHeaderMetadata::from_metadata(metadata).version != 0)
             errors |= VerifyUserHeaderError::InvalidVersion;
@@ -172,6 +176,10 @@ struct UserHeader {
             errors |= VerifyUserHeaderError::NonZeroPaddings;
 
         return errors;
+    }
+
+    inline constexpr bool operator==(const UserHeader& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(other)) == 0;
     }
 };
 
@@ -181,11 +189,13 @@ template <>
 inline constexpr void network_byte_order(UserHeader& header) noexcept {
     if constexpr (std::endian::native != std::endian::little) return;
 
-    // I'm so sorry for this (hardcoded values)
-    const_cast<char*>(header.magic)[0] = 'S';
-    const_cast<char*>(header.magic)[1] = 'U';
-    const_cast<char*>(header.magic)[2] = '\0';
-    *const_cast<std::uint8_t*>(&header.padding1) = 'R';
+    // I'm so sorry for this
+    const_cast<char*>(header.magic)[0] ^= header.magic[1];
+    const_cast<char*>(header.magic)[1] ^= header.magic[0];
+    const_cast<char*>(header.magic)[0] ^= header.magic[1];
+    const_cast<char*>(header.magic)[2] ^= header.padding1;
+    *const_cast<std::uint8_t*>(&header.padding1) ^= header.magic[2];
+    const_cast<char*>(header.magic)[2] ^= header.padding1;
 
     // Nice and easy
     header.user_id = std::byteswap(header.user_id);
@@ -212,8 +222,7 @@ template <>
 inline constexpr UserHeader network_byte_order_copy(const UserHeader& header) noexcept {
     if constexpr (std::endian::native != std::endian::little) return header;
 
-    UserHeader result; // Have to do it like this
-    // This should not be ambiguous since we would be calling ourselves but the function isn't fully defined yet
+    UserHeader result; // We have to do it like this
     network_byte_order(result);
     return result;
 }
@@ -244,9 +253,7 @@ struct UserFile {
         header.bio_len = bio.size();
         // The friends count doesn't exist because we can just subtract byte sizes to calculate it
         // AWFUL `const_cast`s
-        const_cast<char*>(header.magic)[0] = 'U';
-        const_cast<char*>(header.magic)[1] = 'S';
-        const_cast<char*>(header.magic)[2] = 'R';
+        std::strncpy(const_cast<char*>(header.magic), "USR", sizeof(header.magic));
         *const_cast<std::uint8_t*>(&header.padding1) = 0;
         *const_cast<std::uint8_t*>(&header.padding2) = 0;
 
@@ -269,6 +276,11 @@ struct UserFile {
             std::memcpy(ptr, friends.data(), friends.size() * sizeof(UserID)); // Remember to use sizeof
 
         return result;
+    }
+
+    inline constexpr bool operator==(const UserFile& other) const noexcept {
+        return header == other.header && username == other.username &&
+            bio == other.bio && friends == other.friends;
     }
 };
 

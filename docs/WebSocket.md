@@ -69,18 +69,20 @@ x  :  Reserved for future use
 
 ## Packet types
 
-| Name           | Description                                         |
-| -------------- | --------------------------------------------------- |
-| `Auth`         | Authenticate a user                                 |
-| `Deauth`       | Deauthenticate a user                               |
-| `DM`           | Send a private message to a user                    |
-| `Download`     | Download a file from the server                     |
-| `InfoChat`     | Request information about a public chat             |
-| `InfoUser`     | Request information about a user                    |
-| `ManageFriend` | Manage a friend request                             |
-| `Send`         | Send a public message in a chat                     |
-| `Update`       | Send new session information like incoming messages |
-| `Upload`       | Upload a file to the server                         |
+| Name             | Description                                         |
+| ---------------- | --------------------------------------------------- |
+| `Auth`           | Authenticate a user                                 |
+| `Deauth`         | Deauthenticate a user                               |
+| `DM`             | Send a private message to a user                    |
+| `Download`       | Download a file from the server                     |
+| `DownloadChunks` | Download a specific series of chunks from a file    |
+| `InfoChat`       | Request information about a public chat             |
+| `InfoUser`       | Request information about a user                    |
+| `ManageFriend`   | Manage a friend request                             |
+| `Send`           | Send a public message in a chat                     |
+| `Update`         | Send new session information like incoming messages |
+| `Upload`         | Upload a file to the server                         |
+| `UploadChunks`   | Upload a specific series of chunks from a file      |
 
 Here the individual packet payloads will be covered.
 
@@ -176,7 +178,7 @@ After this packet, chunks will follow.
   all chunks have arrived and helps sorting them
 - **Raw file data**: the raw data of the file to download. Note that the last chunk
   may not contain the same amount of data bytes as all the other ones, because the file
-  size is not a multiple of the chosen chunk size
+  size may not be a multiple of the chosen chunk size
 
 Chunk packets keep the same **sequence ID** field as their parent response packet.
 
@@ -192,7 +194,7 @@ file chunks to be transmitted again.
 ```
 
 - **Chunk indeces**: a variadic number of chunk indeces (32bit unsigned integers)
-  that the server must resend with a `Download` chunk packet
+  that the server must resend with a `Download` *chunk* packet
 
 Again, the last chunk expects an acknowledgement, and if a negative one is sent, this
 whole process repeats.
@@ -201,7 +203,7 @@ whole process repeats.
 
 ```
 0-1  :  UserID
-2-3  :  ChatID
+2-5  :  ChatID
 ```
 
 - **UserID**: the UserID of the user that is requesting the information
@@ -273,8 +275,9 @@ This is the structure of the **policy bitmask** field:
 ```
 7 6 5 4 3 2 1 0
 ---------------
-x x x q q u b l
+x p p q q u b l
 
+p  :  Message exchange policy
 q  :  Friend request policy
 u  :  Username flag
 b  :  Bio flag
@@ -282,8 +285,10 @@ l  :  Friends list flag
 x  :  Reserved for future use
 ```
 
-- **Friend request policy**: mirrors the **friend request policy** field of the user
+- **Message exchange policy**: mirrors the **message exchange policy** field of the user
   binary file format, found [here](./User.md#format-header)
+- **Friend request policy**: mirrors the **friend request policy** field of the user
+  binary file format
 - **Username flag**: whether the user can read the requested username
 - **Bio flag**: whether the user can read the requested bio
 - **Friends list flag**: whether the user can read the requested friends list
@@ -339,7 +344,103 @@ again the same packet, also keeping the same **sequence ID**.
 ### `Update`
 
 ```
-
+0-1  :  DMs count
+2-3  :  Friend requests count
+4-5  :  New messages count
+---  :  DMs data
+---  :  Friend request data
+---  :  Message data
 ```
 
+- **DMs count**: the number of new DMs
+- **Friend requests count**: the number of new friend request data (accepted or sent)
+- **New messages count**: the number of *chunks* of new messages in public chats
+- **DMs data**: a variadic number of serialized `DMsMessage` objects from different users.
+  DMs from the same user are guaranteed to be on after the other, but not necessarily in
+  chronological order or sorted among the different `UserID`s
+- **Friend request data**: a variadic number of a structure which will be defined later
+- **Message data**: a variadic number of chunks divided per public chat, whose data
+  will be a series of serialized `DMsMessage` objects that might not be in chronological
+  order
+
+The **friend request data** is defined like this:
+
+```
+0-1  :  Target UserID
+2    :  Action
+3    :  Padding null byte
+```
+
+- **Target UserID**: the `UserID` of the user to which this action relates
+- **Action**: can be `0` if the target user accepted a previously sent friend request,
+  or it can be `1` if the target user sent a friend request to the user receiving this
+  packet
+
+The **message data** is divided in chunks like this:
+
+```
+0-3  :  ChatID
+4-5  :  Message count
+---  :  DMsMessage data
+```
+
+- **ChatID**: the `ChatID` of the chat the messages were sent in
+- **Message count**: the number of messages in this chunk
+- **DMsMessage data**: a variadic number of serialized `DMsMessage` objects
+
 ### `Upload`
+
+```
+0-3  :  Chunk size
+4-7  :  Chunk count
+---  :  Original filename
+```
+
+- **Chunk size**: indicates how many bytes of file data each chunk will contain
+- **Chunk count**: indicates how many chunks will follow
+- **Original filename**: a string containing the original name of the file to upload
+
+After this packet, the server will respond with an `AttachmentID` that can be used
+inside a `DMsMessage` payload, so that a message can be sent with an already registered
+file and then the actual file contents are sent.
+
+#### Response
+
+```
+0-3  :  AttachmentID
+```
+
+- **AttachmentID**: a new `AttachmentID` (provided by the server) associated with the
+  file to upload
+
+#### Chunk
+
+```
+0-3  :  Chunk index
+---  :  Raw file data
+```
+
+- **Chunk index**: the number of the chunk in the sequence. This is used to ensure that
+  all chunks have arrived and helps sorting them
+- **Raw file data**: the raw data of the file to download. Note that the last chunk
+  may not contain the same amount of data bytes as all the other ones, because the file
+  size may not be a multiple of the chosen chunk size
+
+Chunk packets keep the same **sequence ID** field as their parent request packet.
+
+The last chunk packet will expect an acknowledgement signifying that the server was able
+to receive and reconstruct the file contents. If a negative acknowledgement is received,
+the packet transmitting it must be a `DownloadChunks` packet, asking for one or more
+file chunks to be transmitted again.
+
+### `UploadChunks`
+
+```
+---  :  Chunk indeces
+```
+
+- **Chunk indeces**: a variadic number of chunk indeces (32bit unsigned integers)
+  that the client must resend with a `Download` *chunk* packet
+
+Again, the last chunk expects an acknowledgement, and if a negative one is sent, this
+whole process repeats.

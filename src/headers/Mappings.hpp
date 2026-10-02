@@ -58,6 +58,10 @@ struct MapHeaderConfig {
             .last_slot = (std::uint8_t) (config >> 3)
         };
     }
+
+    inline constexpr bool operator==(const MapHeaderConfig& other) const noexcept {
+        return version == other.version && full == other.full && last_slot == other.last_slot;
+    }
 };
 
 #pragma pack(push, 1)
@@ -84,12 +88,17 @@ struct MapHeader {
     inline constexpr MapHeaderVerifyError verify() const noexcept {
         MapHeaderVerifyError errors;
 
-        if (magic[0] != 'M' || magic[1] != 'A' || magic[2] != 'P')
+        if (std::memcmp("MAP", magic, sizeof(magic)) != 0)
             errors |= MapHeaderVerifyError::InvalidMagic;
         if ((config & 0b00000011) != 0)
             errors |= MapHeaderVerifyError::InvalidVersion;
 
         return errors;
+    }
+
+    inline constexpr bool operator==(const MapHeader& other) const noexcept {
+        return std::memcmp(magic, other.magic, sizeof(magic)) == 0 &&
+            config == other.config;
     }
 };
 
@@ -105,6 +114,10 @@ struct MapPageHeader {
     inline constexpr MapHeaderVerifyError verify() const noexcept {
         if (magic != 'T') return MapHeaderVerifyError::InvalidMagic;
         return MapHeaderVerifyError::OK;
+    }
+
+    inline constexpr bool operator==(const MapPageHeader& other) const noexcept {
+        return magic == other.magic && last_slot == other.last_slot;
     }
 };
 
@@ -150,6 +163,10 @@ struct AttachmentMapping {
         result.mapping.resize(data.size() - sizeof(result.id), '\0');
         std::memcpy(result.mapping.data(), data.data() + sizeof(result.id), result.mapping.size());
         return result;
+    }
+
+    inline constexpr bool operator==(const AttachmentMapping& other) const noexcept {
+        return id == other.id && mapping == other.mapping;
     }
 };
 

@@ -7,6 +7,7 @@
 #include <string>
 #include <fstream>
 #include <filesystem>
+#include <cstring>
 
 namespace std {
 
@@ -17,8 +18,9 @@ namespace fs = ::std::filesystem;
 namespace ControlZ {
 
 /// @brief Derive a context string from a variadic number of strings by concatenating
-///        them and separating them with a non-breaking space
+///        them and separating them with a provided character
 /// @tparam ...Args A variadic number of `std::string`s
+/// @param interpolation_char The character used inbetween string concatenations
 /// @param x The first string
 /// @param ...args All of the others
 /// @return The concatenated strings
@@ -95,6 +97,10 @@ struct DMsHeaderConfig {
             .compression_flag = (config &  1)       != 0
         };
     }
+
+    inline constexpr bool operator==(const DMsHeaderConfig& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(other)) == 0;
+    }
 };
 
 #pragma pack(push, 1)
@@ -127,12 +133,16 @@ struct DMsHeader {
 
         DMsHeaderVerifyError errors;
 
-        if (magic[0] != 'D' || magic[1] != 'M') errors |= DMsHeaderVerifyError::InvalidMagic;
+        if (std::memcmp("DM", magic, sizeof(magic)) != 0) errors |= DMsHeaderVerifyError::InvalidMagic;
         if (version > 0) errors |= DMsHeaderVerifyError::InvalidVersion;
 
         if ((config & 0b11111100) != 0) errors |= DMsHeaderVerifyError::InvalidConfig;
 
         return errors;
+    }
+
+    inline constexpr bool operator==(const DMsHeader& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(other));
     }
 };
 
@@ -144,6 +154,11 @@ struct DMsNode {
     ///        linking type specified in the file header (with `linking type == 1`
     ///        this becomes `prev_node_offset`)
     std::uint32_t next_node_offset = 0;
+
+    inline constexpr bool operator==(const DMsNode& other) const noexcept {
+        // Not worth calling `std::memcmp()`
+        return seed == other.seed && next_node_offset && other.next_node_offset;
+    }
 };
 
 #pragma pack(pop)

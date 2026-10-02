@@ -25,7 +25,7 @@ and also a deserialization operation, which should include decryption.
 The file header for the DMs binary format is 14 bytes in size:
 
 ```
-0-1  :  Magic bytes ['D', 'M']
+0-1  :  Magic bytes "DM"
 2    :  Version number
 3    :  Global configuration
 4-5  :  Node count
@@ -34,19 +34,26 @@ The file header for the DMs binary format is 14 bytes in size:
 
 - **Magic bytes**: a simple identifier for the format
 - **Version number**: gets incremented on every revision of the format
-- **Global configuration**: a bitmask for information about the whole file:
+- **Global configuration**: a bitmask for config and metadata about the whole file
+- **Node count**: a 16bit number of nodes (or messages) stored in this file
+- **Last node address**: the 64bit absolute byte address of the last node in
+  this file
+
+This is the structure of the **global configuration** field:
+
 ```
 7 6 5 4 3 2 1 0
 ---------------
 x x x x x x l k
 
-k  :  Zstd compression flag (not yet implemented)
-l  :  Linking type (0 = forward and 1 = backward)
+k  :  Zstd compression flag
+l  :  Linking type
 x  :  Reserved for future use
 ```
-- **Node count**: a 16bit number of nodes (or messages) stored in this file
-- **Last node address**: the 64bit absolute byte address of the last node in
-  this file
+
+- **Zstd compression flag**: indicates whether the whole file's contents were
+  compressed with Zstd (not yet implemented)
+- **Linking type**: the way nodes are linked, `0` is forward and `1` is backward
 
 ## Node header
 
@@ -57,7 +64,7 @@ Every node's size is 12 bytes:
 8-11 :  Next/previous node offset
 ```
 
-- **Encryption seed**: the 64bit seed used for the ***light*** message
+- **Encryption seed**: the 64bit seed used for the ***VERY light*** message
   encryption process (see [encryption](#encryption))
 - **Next/previous node offset**: when the file uses forward node linking,
   this value holds the byte offset to the next node, when backward node
@@ -65,9 +72,9 @@ Every node's size is 12 bytes:
 
 ## Encryption
 
-The kind of encryption implemented by this format ***is not safe for
-production-grade systems*** as it is symmetrical and even a simple look at
-the source code should be enough to write a decryption function.
+The kind of encryption implemented by this format ***is not safe for***
+***production-grade systems*** as it is symmetrical and the barest look at
+the source code should be enough to fully understand how it works.
 
 The one and only reason that encryption is implemented is to provide even
 a small protection against frequency-based data analysis.
@@ -100,8 +107,8 @@ accepts the data to encrypt and the key to use as arguments.
 A context string, used in the encryption process, is a combination
 of text data related to the context in which the encrypted data will be
 used.  
-Usually this data is a list of usernames separated by a non-breaking
-space ` `.
+Usually this data is a list of usernames separated by a provided interpolation
+character.
 
 The server where the master DMs file is stored ***is required*** to hold
 a copy of the context string, only if the file holds a public chat,

@@ -15,7 +15,7 @@ filling entries in nested tables with absolute addresses to these structures
 The header of this binary format is 4 bytes in size:
 
 ```
-0-2  :  Magic bytes ['M', 'A', 'P']
+0-2  :  Magic bytes "MAP"
 3    :  Configuration bitmask
 ```
 

@@ -12,12 +12,16 @@ Here the whole specification of the format will be covered.
 The header of this binary format is 8 bytes long:
 
 ```
-0-3  :  Message timestamp in seconds from a custom epoch on 1/1/2027 at 00:00
-4-5  :  UserID of the sender
-6-7  :  Message metadata
+0-3  :  Timestamp
+4-5  :  UserID
+6-7  :  Metadata
 ```
 
-These are the bits of the metadata field in detail, written in big-endian
+- **Timestamp**: a custom timestamp in seconds on 1/1/2027 at 00:00 UTC
+- **UserID**: the `UserID` of the sender
+- **Metadata**: a bitmask integer used to store message metadata
+
+These are the bits of the **metadata** field in detail, written in big-endian
 representation:
 
 ```
@@ -126,8 +130,7 @@ dynamic structure, with a minimum size of 6 bytes:
 ```
 0    :  Reply count
 1    :  Padding null byte
-2-5  :  First reply message timestamp
-...  :  More message timestamps if specified
+---  :  Message timestamps
 ```
 
 - **Reply count**: the number of messages being replied to, biased by `1`,
@@ -140,8 +143,11 @@ dynamic structure, with a minimum size of 6 bytes:
 In the final serialized format this should be the layout of all payloads:
 
 ```
-[header] [replies] [attachments] [message]
+[header]
+[replies]
+[attachments]
+[message]
 ```
 
 Every payload after the header is optional, but at least one between
-attachments and message data is required, unless deletion is the case.
+attachments and message data is required, unless the deletion state is active.
