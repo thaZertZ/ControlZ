@@ -1,5 +1,5 @@
 #include <iostream>
-#include "../../src/headers/Chat.hpp"
+#include "../src/headers/Chat.hpp"
 #include "test_support.hpp"
 
 int main() {
@@ -7,6 +7,7 @@ int main() {
     using namespace ControlZ;
 
     auto path = ControlZTests::temp_path("test.chat");
+    ControlZTests::remove_if_present(path);
 
     ChatHeaderMetadata meta = {
         .version = 0,
@@ -34,6 +35,7 @@ int main() {
 
     REQUIRE(create_chat_file(path, file) == CreateChatFileError::OK);
     auto result = deserialize_chat_file(path);
+    if (!result.has_value()) std::cout << +result.error() << '\n';
     REQUIRE(result.has_value());
     auto data = result.value();
     // The exact same

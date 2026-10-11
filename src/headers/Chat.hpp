@@ -24,9 +24,9 @@ struct ChatHeaderMetadata {
     /// @brief Whether the chat requires a password to join
     bool requires_password = false;
     /// @brief Whether non-members can read this chat's name
-    bool name_flag = false;
+    bool name_flag = true;
     /// @brief Whether non-members can read this chat's description
-    bool desc_flag = false;
+    bool desc_flag = true;
     /// @brief Whether non-members can view this chat's members list
     bool members_flag = false;
 
@@ -81,7 +81,7 @@ struct ChatHeader {
     /// @brief The `ChatID`. It can't be `0`
     ChatID chat_id = 0;
     /// @brief Metadata about the chat (can be unpacked with `ChatHeaderMetadata`)
-    std::uint8_t metadata = 0;
+    std::uint8_t metadata = ChatHeaderMetadata().to_metadata();
     /// @brief The length in bytes of the chat name
     std::uint8_t name_len = 0;
     /// @brief The length in bytes of the chat description
@@ -109,6 +109,39 @@ struct ChatHeader {
     }
 };
 
+/// @brief Convert in-place the endianness of a `ChatHeader` if the host is little endian
+/// @param header The header to convert
+template <>
+inline constexpr void network_byte_order(ChatHeader& header) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return;
+
+    // I'm so sorry for this
+    const_cast<char*>(header.magic)[0] ^= header.magic[1];
+    const_cast<char*>(header.magic)[1] ^= header.magic[0];
+    const_cast<char*>(header.magic)[0] ^= header.magic[1];
+    const_cast<char*>(header.magic)[2] ^= header.magic[3];
+    const_cast<char*>(header.magic)[3] ^= header.magic[2];
+    const_cast<char*>(header.magic)[2] ^= header.magic[3];
+
+    header.chat_id = std::byteswap(header.chat_id);
+    header.metadata ^= header.name_len;
+    header.name_len ^= header.metadata;
+    header.metadata ^= header.name_len;
+    header.members_len = std::byteswap(header.members_len);
+}
+
+/// @brief Return a value with the converted endianness of another value
+///        of type `ChatHeader` if the host is little endian
+/// @param header The header to convert
+template <>
+inline constexpr ChatHeader network_byte_order_copy(const ChatHeader& header) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return header;
+
+    ChatHeader result; // We have to do it like this
+    network_byte_order(result);
+    return result;
+}
+
 /// @brief A struct representing a chat file
 struct ChatFile {
     /// @brief The file header
@@ -122,7 +155,7 @@ struct ChatFile {
     /// @brief Optional password data storing 32 bytes of an
     ///        Argon2id salt and 32 bytes of an Argon2id hash,
     ///        only if the header dictated so
-    std::optional<std::array<char, 64>> pswd_data;
+    std::optional<std::array<char, 64>> pswd_data = std::nullopt;
 
     /// @brief Return the size in bytes of a hypothetically serialized
     ///        instance of this struct
@@ -133,11 +166,9 @@ struct ChatFile {
         return size;
     }
 
-    /// @brief Serialize an instance of this struct into a string of bytes
-    ///        that can be directly written to a file
-    inline constexpr std::string serialize() noexcept {
-        // Fix invariants (eww)
-        std::strncpy(const_cast<char*>(header.magic), "CHAT", sizeof(header.magic));
+    /// @brief Fix this object's invariants according to what is specified by the format
+    inline constexpr void normalize() noexcept {
+        std::memcpy(const_cast<char*>(header.magic), "CHAT", sizeof(header.magic));
 
         // Fix the metadata
         ChatHeaderMetadata meta = ChatHeaderMetadata::from_metadata(header.metadata);
@@ -151,6 +182,12 @@ struct ChatFile {
         header.name_len = name.size();
         header.desc_len = description.size();
         header.members_len = members.size();
+    }
+
+    /// @brief Serialize an instance of this struct into a string of bytes
+    ///        that can be directly written to a file
+    inline constexpr std::string serialize() noexcept {
+        this->normalize(); // Fix invariants
 
         // Start serializing
         std::string result(this->size(), '\0');

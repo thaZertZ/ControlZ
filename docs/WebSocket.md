@@ -5,6 +5,8 @@ In ControlZ, the WebSocket protocol is used as the main data exchange
 method between clients and the server, and a custom ControlZ subprotocol
 has been ideated specifically for the case.
 
+This subprotocol always expects data in network byte order (big endian)
+representation, both packets and their payloads.  
 Here the specification of this subprotocol will be covered.
 
 ## Protocol header
@@ -12,11 +14,12 @@ Here the specification of this subprotocol will be covered.
 The first 10 bytes of each packet represent the same data:
 
 ```
-0    :  Packet type and version
-1    :  Flags
-2-3  :  Packet ID
-4-5  :  Response ID
-6-9  :  Payload length
+0     :  Packet type and version
+1     :  Flags
+2-3   :  Packet ID
+4-5   :  Response ID
+6-7   :  UserID
+8-11  :  Payload length
 ```
 
 - **Packet type and version**: the kind of packet the payload represents and
@@ -30,10 +33,12 @@ t  :  Packet type
 v  :  Version
 ```
 - **Flags**: a bitmask for packet metadata
-- **Packet ID**: a unique number associated with this packet (fragmented
+- **Sequence ID**: a unique number associated with this packet (fragmented
   and chunked packets don't override this, instead they keep the one of
   the first packet in the chunk/fragment sequence)
 - **Response ID**: the **packet ID** field of the packet being responded to
+  by ACK or NACK flags
+- **UserID**: the `UserID` of the user sending the packet
 - **Payload length**: the length of the payload following this header
 
 The packet metadata is structured like this:
@@ -67,34 +72,55 @@ x  :  Reserved for future use
   last chunk packet of a sequence must turn the **fragment flag** bit off to
   signal the end of it
 
+Requesting or responding with both ACK and NACK is illegal.
+
+Every new packet gets the smallest available **packet ID** value.  
+The two ends should keep track of which **packet ID** fields of their sent packets
+can be "forgotten", meaning that that sequence was acknowledged and isn't needed
+anymore (read more at [`SequenceID`](./SequenceID.md)).
+
 ## Packet types
 
 | Name             | Description                                         |
 | ---------------- | --------------------------------------------------- |
+| `None`           | Sending this packet won't do ***anything***         |
 | `Auth`           | Authenticate a user                                 |
+| `AuthToken`      | Reauthenticate a user with a session token          |
 | `Deauth`         | Deauthenticate a user                               |
 | `DM`             | Send a private message to a user                    |
 | `Download`       | Download a file from the server                     |
 | `DownloadChunks` | Download a specific series of chunks from a file    |
+| `Heartbeat`      | Tell the other end that this end is alive           |
 | `InfoChat`       | Request information about a public chat             |
 | `InfoUser`       | Request information about a user                    |
-| `ManageFriend`   | Manage a friend request                             |
+| `ManageFriend`   | Manage a friend relationship                        |
 | `Send`           | Send a public message in a chat                     |
 | `Update`         | Send new session information like incoming messages |
+| `UpdateChat`     | Update a public chat's settings                     |
+| `UpdateUser`     | Update a user's settings                            |
 | `Upload`         | Upload a file to the server                         |
 | `UploadChunks`   | Upload a specific series of chunks from a file      |
 
 Here the individual packet payloads will be covered.
 
+### `None`
+
+Sending a packet with this type will not do ***anything***, not even
+update the user activity list like `Heartbeat`.  
+Any payload is *ignored* and the **packet ID** field's *value* of this
+packet doesn't get registered as already used.
+
+The only rare case in which this packet would be sent is when responding
+with an acknowledgement or a negative one to another packet without having
+to send a payload.
+
 ### `Auth`
 
 ```
-0-1  :  UserID
-x-y  :  Username hash
-z-w  :  Password hash
+0-31   :  Username hash
+32-63  :  Password hash
 ```
 
-- **UserID**: the UserID associated with the user to authenticate
 - **Username hash**: an Argon2id hash of the username
 - **Password hash**: an Argon2id hash of the password
 
@@ -107,14 +133,33 @@ z-w  :  Password hash
 - **Session token**: a unique 16-character identifier for a user session.
   This must be used when deauthenticating
 
+### `AuthToken`
+
+```
+0-15  :  Session token
+```
+
+- **Session token**: a unique 16-character identifier for a user session
+
+This packet expects an ackowledgement, if a negative one is received it
+either means that the session token is invalid or that another session is
+active with this token.
+
+Internally, the server keeps a list of session tokens per user, together
+with information about if the session is currently active (determined by
+whether the user has sent at least one packet in the last minute).  
+A session token remains in the list for 24 hours, after which it is
+removed and therefore becomes invalid.
+
+When the server checks if the session token is valid, it just checks if
+it is in the list and is *also* inactive.
+
 ### `Deauth`
 
 ```
-0-1   :  UserID
-2-17  :  Session token
+0-15
 ```
 
-- **User ID**: the UserID associated with the user to deauthenticate
 - **Session token**: the unique session identifier received upon authentication
 
 This packet expects an acknowledgement.
@@ -199,14 +244,18 @@ file chunks to be transmitted again.
 Again, the last chunk expects an acknowledgement, and if a negative one is sent, this
 whole process repeats.
 
+### `Heartbeat`
+
+The payload is empty and this packet expects to acknowledgements.  
+This packet is used by the server to update the session activity list for each user,
+fundamental for reauthenticating a user with a token.
+
 ### `InfoChat`
 
 ```
-0-1  :  UserID
-2-5  :  ChatID
+0-3  :  ChatID
 ```
 
-- **UserID**: the UserID of the user that is requesting the information
 - **ChatID**: the ChatID of the chat to get information about
 
 This packet expects an acknowledgement attached to a response, if a negative
@@ -236,11 +285,9 @@ The negative acknowledgement means that the **ChatID** field was invalid.
 ### `InfoUser`
 
 ```
-0-1  :  UserID
-2-3  :  Target UserID
+0-1  :  Target UserID
 ```
 
-- **UserID**: the UserID of the user that is requesting the information
 - **Target UserID**: the UserID to get information about
 
 This packet expects an acknowledgement attached to a response, if a negative
@@ -296,13 +343,11 @@ x  :  Reserved for future use
 ### `ManageFriend`
 
 ```
-0-1  :  UserID
-2-3  :  Target UserID
-4    :  Action
-5    :  Padding null byte
+0-1  :  Target UserID
+2    :  Action
+3    :  Padding null byte
 ```
 
-- **Sender UserID**: the `UserID` of the user sending this packet
 - **Target UserID**: the `UserID` of the friend
 - **Action**: a value representing which action to perform on the specified user.
   `0` = request if it is a friend, `1` = send friend request,
@@ -353,7 +398,7 @@ again the same packet, also keeping the same **sequence ID**.
 ```
 
 - **DMs count**: the number of new DMs
-- **Friend requests count**: the number of new friend request data (accepted or sent)
+- **Friend requests count**: the number of new friend request data
 - **New messages count**: the number of *chunks* of new messages in public chats
 - **DMs data**: a variadic number of serialized `DMsMessage` objects from different users.
   DMs from the same user are guaranteed to be on after the other, but not necessarily in
@@ -373,8 +418,8 @@ The **friend request data** is defined like this:
 
 - **Target UserID**: the `UserID` of the user to which this action relates
 - **Action**: can be `0` if the target user accepted a previously sent friend request,
-  or it can be `1` if the target user sent a friend request to the user receiving this
-  packet
+  it can be `1` if the target user sent a friend request to the user receiving this
+  packet, or it can be `2` if the target user removed this user as a friend
 
 The **message data** is divided in chunks like this:
 
@@ -387,6 +432,29 @@ The **message data** is divided in chunks like this:
 - **ChatID**: the `ChatID` of the chat the messages were sent in
 - **Message count**: the number of messages in this chunk
 - **DMsMessage data**: a variadic number of serialized `DMsMessage` objects
+
+### `UpdateChat`
+
+```
+---  :  Raw ChatFile data
+```
+
+- **Raw ChatFile data**: raw binary data from a serialized `ChatFile` object
+
+This packet expects an acknowledgement, if a negative acknowledgement is received,
+it means that the user did not have the required privileges to update the chat,
+or the file was not able to be written to disk.
+
+### `UpdateUser`
+
+```
+---  :  Raw UserFile data
+```
+
+- **Raw UserFile data**: raw binary data from a serialized `UserFile` object
+
+This packet expects an acknowledgement, if a negative acknowledgement is received,
+it means that the file was not able to be written to disk.
 
 ### `Upload`
 

@@ -6,7 +6,16 @@
 - Change the `append_*` functions for binary formats to align
   data before writing to follow the serialization boundary sanitization
   mentioned earlier
-- Make `normalize()` methods on all binary structure formats to allow
-  not serializing to a string but still fixing internal state, then
-  call that method when serializing to same time
-- Give better defaults to metadata fields
+
+## `src/headers/WebSocket.hpp`:
+
+- Finish implementing all packet types with the same API
+
+## `docs/WebSocket.md`:
+
+- Keep reviewing the specification according to the needs of implementations
+
+## `docs/SequenceID.md`:
+
+- Write the specification for the logic that will handle `SequenceID`s in
+  the WebSockets subprotocol

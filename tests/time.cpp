@@ -1,5 +1,5 @@
 #include <iostream>
-#include "../../src/headers/Time.hpp"
+#include "../src/headers/Time.hpp"
 #include "test_support.hpp"
 
 int main() {

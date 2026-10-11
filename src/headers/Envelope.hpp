@@ -198,11 +198,16 @@ struct DMsMessageReplies {
         ) * sizeof(Timestamp);
     }
 
-    /// @brief Return a string of bytes containing a serialized version of this struct
-    inline constexpr std::string serialize() noexcept {
+    /// @brief Fix this object's invariants according to what is specified by the format
+    inline constexpr void normalize() noexcept {
         // Correct any mismatch in data (assuming that the timestamps vector is not empty else add a 0 element)
         if (timestamps.empty()) timestamps.push_back(0);
         reply_count = timestamps.size() - 1;
+    }
+
+    /// @brief Return a string of bytes containing a serialized version of this struct
+    inline constexpr std::string serialize() noexcept {
+        this->normalize(); // Fix invariants
 
         std::string result(this->size(), '\0'); // Resize and zero out
 
@@ -329,10 +334,9 @@ struct DMsMessage {
         return result;
     }
 
-    /// @brief Create a string of bytes representing a supposedly valid
-    ///        message from this instance
-    inline constexpr std::string serialize() {
-        // Before doing anything, correct mismatching data
+    /// @brief Fix this object's invariants according to what is specified by the format
+    inline constexpr void normalize() noexcept {
+        // Correct mismatching data
         DMsMessageMetadata meta = DMsMessageMetadata::from_metadata(header.metadata);
 
         if (!replies) meta.reply = false;
@@ -364,6 +368,12 @@ struct DMsMessage {
             else
                 payload->short_encode();
         }
+    }
+
+    /// @brief Create a string of bytes representing a supposedly valid
+    ///        message from this instance
+    inline constexpr std::string serialize() {
+        this->normalize(); // Fix invariants
 
         // Now we actually serialize
         std::string output(this->size(), 0);

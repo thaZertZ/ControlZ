@@ -66,15 +66,15 @@ struct UserHeaderMetadata {
     /// @brief The moderation level
     ModLevel mod_level = ModLevel::Normal;
     /// @brief The policy that users should follow to read this user's bio
-    UserPolicy bio_policy = UserPolicy::NoOne;
+    UserPolicy bio_policy = UserPolicy::Friends;
     /// @brief The policy that users should follow to read this user's friend list
-    UserPolicy friends_policy = UserPolicy::NoOne;
+    UserPolicy friends_policy = UserPolicy::Friends;
     /// @brief The status of this user's account
     UserStatus user_status = UserStatus::Active;
     /// @brief The policy that users should follow to send friend requests to this user
-    UserPolicy friend_req_policy = UserPolicy::NoOne;
+    UserPolicy friend_req_policy = UserPolicy::MutualChatMembers;
     /// @brief The policy that users should follow to send messages to this user
-    UserPolicy exchange_policy = UserPolicy::NoOne;
+    UserPolicy exchange_policy = UserPolicy::Friends;
 
     /// @brief Pack this struct into a valid metadata field for a `UserHeader`
     inline constexpr std::uint16_t to_metadata() const noexcept {
@@ -148,7 +148,7 @@ struct UserHeader {
     /// @brief The `UserID` of this user
     UserID user_id = 0;
     /// @brief Contains metadata about the user and their data policies
-    std::uint16_t metadata = 0;
+    std::uint16_t metadata = UserHeaderMetadata().to_metadata();
     /// @brief The timestamp in seconds, from 1/1/2027 at 00:00 UTC, on which the user
     ///        was registered
     Timestamp registration_timestamp = 0;
@@ -245,17 +245,22 @@ struct UserFile {
         return result % 2 == 0 ? result : result + 1; // Account for padding
     }
 
-    /// @brief Serialize this object into a string of bytes, adding an
-    ///        extra null byte to align to two bytes if needed
-    inline constexpr std::string serialize() noexcept {
-        // Correct any mismatching data before serializing
+    /// @brief Fix this object's invariants according to what is specified by the format
+    inline constexpr void normalize() noexcept {
+        // Correct any mismatching data
         header.username_len = username.size();
         header.bio_len = bio.size();
         // The friends count doesn't exist because we can just subtract byte sizes to calculate it
         // AWFUL `const_cast`s
-        std::strncpy(const_cast<char*>(header.magic), "USR", sizeof(header.magic));
+        std::memcpy(const_cast<char*>(header.magic), "USR", sizeof(header.magic));
         *const_cast<std::uint8_t*>(&header.padding1) = 0;
         *const_cast<std::uint8_t*>(&header.padding2) = 0;
+    }
+
+    /// @brief Serialize this object into a string of bytes, adding an
+    ///        extra null byte to align to two bytes if needed
+    inline constexpr std::string serialize() noexcept {
+        this->normalize(); // Fix invariants
 
         // Resize it from the start
         std::string result(this->size(), '\0');

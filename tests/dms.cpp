@@ -1,6 +1,6 @@
 #include <iostream>
 #include <filesystem>
-#include "../../src/headers/DMs.hpp"
+#include "../src/headers/DMs.hpp"
 #include "test_support.hpp"
 
 int main() {

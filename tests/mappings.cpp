@@ -1,6 +1,6 @@
 #include <iostream>
 #include <vector>
-#include "../../src/headers/Mappings.hpp"
+#include "../src/headers/Mappings.hpp"
 #include "test_support.hpp"
 
 int main() {

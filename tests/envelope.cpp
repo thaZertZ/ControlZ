@@ -1,6 +1,6 @@
 #include <iostream>
 #include <cstring>
-#include "../../src/headers/Envelope.hpp"
+#include "../src/headers/Envelope.hpp"
 #include "test_support.hpp"
 
 int main() {

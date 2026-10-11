@@ -1,5 +1,5 @@
 #include <iostream>
-#include "../../src/headers/Common.hpp"
+#include "../src/headers/Common.hpp"
 #include "test_support.hpp"
 
 int main() {

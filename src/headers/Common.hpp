@@ -17,6 +17,10 @@ using ChatID = std::uint32_t;
 using Timestamp = std::uint32_t;
 /// @brief Alias for an `AttachmentID` (16bit unsigned integer)
 using AttachmentID = std::uint16_t;
+/// @brief Alias for a `SequenceID` (16bit unsigned integer)
+using SequenceID = std::uint16_t;
+/// @brief Alias for a `SessionToken` (16byte `char` array)
+using SessionToken = std::array<char, 16>;
 
 /// @brief Create a scoped enum type with comparison operator overloads and utility methods
 /// @param name The type name
@@ -32,7 +36,7 @@ using AttachmentID = std::uint16_t;
             __VA_ARGS__ \
         }; \
         private: \
-        name ## _enum value = ::ControlZ::name::def; \
+        name ## _enum value = name::name ## _enum::def; \
         public: \
         name() noexcept = default; \
         ~name() noexcept = default; \
@@ -72,8 +76,9 @@ using AttachmentID = std::uint16_t;
             return value; \
         } \
         inline constexpr backing operator+() const noexcept /* unary + */ { return value; } \
+        inline constexpr name operator~() const noexcept /* unary ~ */ { return name(~value); } \
         explicit inline constexpr operator bool() const noexcept /* allow in if statements */ { \
-            return value != ::ControlZ::name::zero; \
+            return value != name::name ## _enum::zero; \
         } \
     };
 
@@ -241,17 +246,7 @@ inline constexpr Type network_byte_order_copy(const Type& value) noexcept {
 template <>
 inline constexpr void network_byte_order(std::string& str) noexcept {
     if constexpr (std::endian::native != std::endian::little) return;
-    std::size_t size = str.size();
-    for (std::size_t i = 0; i < size; i += 2) {
-        if (i == size - 1) break; // We reached an odd place and we can't swap
-
-        char& bucket1 = str[i];
-        char& bucket2 = str[i + 1];
-        // Old but gold trick
-        bucket1 ^= bucket2;
-        bucket2 ^= bucket1;
-        bucket1 ^= bucket2;
-    }
+    std::reverse(str.begin(), str.end()); // This is actual endianness conversion
 }
 
 /// @brief Return a value with the converted endianness of the bytes another
@@ -261,20 +256,8 @@ inline constexpr void network_byte_order(std::string& str) noexcept {
 template <>
 inline constexpr std::string network_byte_order_copy(const std::string& str) noexcept {
     if constexpr (std::endian::native != std::endian::little) return str;
-
-    // Same exact logic as before
-    std::string result = str;
-    std::size_t size = result.size();
-    for (std::size_t i = 0; i < size; i += 2) {
-        if (i == size - 1) break;
-
-        char& bucket1 = result[i];
-        char& bucket2 = result[i + 1];
-        bucket1 ^= bucket2;
-        bucket2 ^= bucket1;
-        bucket1 ^= bucket2;
-    }
-
+    std::string result(str.size(), '\0');
+    std::reverse(result.begin(), result.end());
     return result;
 }
 

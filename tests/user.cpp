@@ -1,6 +1,6 @@
 #include <iostream>
 #include <filesystem>
-#include "../../src/headers/User.hpp"
+#include "../src/headers/User.hpp"
 #include "test_support.hpp"
 
 int main() {
