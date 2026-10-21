@@ -11,7 +11,7 @@ Here the specification of this subprotocol will be covered.
 
 ## Protocol header
 
-The first 10 bytes of each packet represent the same data:
+The first 12 bytes of each packet represent the same data:
 
 ```
 0     :  Packet type and version
@@ -33,11 +33,14 @@ t  :  Packet type
 v  :  Version
 ```
 - **Flags**: a bitmask for packet metadata
-- **Sequence ID**: a unique number associated with this packet (fragmented
-  and chunked packets don't override this, instead they keep the one of
-  the first packet in the chunk/fragment sequence)
-- **Response ID**: the **packet ID** field of the packet being responded to
-  by ACK or NACK flags
+- **Packet ID**: the ID of this packet's sequence. Fragments and chunks in one
+  sequence retain the ID assigned to the first packet. IDs are scoped to one
+  WebSocket connection and one sending direction. ID `0` is reserved for `None`,
+  `Explode`, and `Heartbeat`, while all other packet types use a nonzero ID.
+- **Response ID**: the nonzero **Packet ID** of the earlier packet this packet
+  responds to. It is `0` when the packet is not a response and does not otherwise
+  refer to an earlier packet. ACK/NACK-only `None` packets use **packet ID** `0`
+  and put the responded-to packet's ID in **response ID**.
 - **UserID**: the `UserID` of the user sending the packet
 - **Payload length**: the length of the payload following this header
 
@@ -66,7 +69,7 @@ x  :  Reserved for future use
   set to `0` if this is the last or only fragment. Every fragment packet except
   the first one must turn on the **chunk flag** bit
 - **Response flag**: signal that this packet is a response version of the type
-  of the last received packet (used when performing one-way requests)
+  of the specified packet type
 - **Chunk flag**: signal that this packet is a chunk of a previously sent packet
   that initiated a chunk sequence by setting the **fragment flag** bit. The
   last chunk packet of a sequence must turn the **fragment flag** bit off to
@@ -74,45 +77,61 @@ x  :  Reserved for future use
 
 Requesting or responding with both ACK and NACK is illegal.
 
-Every new packet gets the smallest available **packet ID** value.  
-The two ends should keep track of which **packet ID** fields of their sent packets
-can be "forgotten", meaning that that sequence was acknowledged and isn't needed
-anymore (read more at [`SequenceID`](./SequenceID.md)).
+Each sender allocates IDs independently from the other sender. The client and server
+may therefore use the same numeric **packet ID** simultaneously in opposite
+directions. A sender reserves an ID for an active sequence and releases it only on
+the terminal response defined for that sequence. The receiver tracks active incoming
+sequences separately, and it does not mirror the sender's allocation bitmap. Full
+allocation, retry, response-matching, and reset rules are specified in
+[`SequenceID.md`](./SequenceID.md).
+
+An ACK or NACK is correlated to the request using **Response ID**. A retry-requesting
+NACK is nonterminal: the sender retries the same logical packet with the same
+**packet ID**, and the receiver retains the inbound sequence.  
+A terminal ACK or NACK ends the sequence and permits the sender to release that ID.
+The receiver must not execute a retry as a second independent operation. A timeout does
+not authorize resending a request.  
+If the response does not arrive, the implementation reports a timeout and closes the
+connection, which resets that connection's ID state.
 
 ## Packet types
 
-| Name             | Description                                         |
-| ---------------- | --------------------------------------------------- |
-| `None`           | Sending this packet won't do ***anything***         |
-| `Auth`           | Authenticate a user                                 |
-| `AuthToken`      | Reauthenticate a user with a session token          |
-| `Deauth`         | Deauthenticate a user                               |
-| `DM`             | Send a private message to a user                    |
-| `Download`       | Download a file from the server                     |
-| `DownloadChunks` | Download a specific series of chunks from a file    |
-| `Heartbeat`      | Tell the other end that this end is alive           |
-| `InfoChat`       | Request information about a public chat             |
-| `InfoUser`       | Request information about a user                    |
-| `ManageFriend`   | Manage a friend relationship                        |
-| `Send`           | Send a public message in a chat                     |
-| `Update`         | Send new session information like incoming messages |
-| `UpdateChat`     | Update a public chat's settings                     |
-| `UpdateUser`     | Update a user's settings                            |
-| `Upload`         | Upload a file to the server                         |
-| `UploadChunks`   | Upload a specific series of chunks from a file      |
+| Name             | Description                                                |
+| ---------------- | ---------------------------------------------------------- |
+| `None`           | Sending this packet won't do ***anything***                |
+| `Auth`           | Authenticate a user                                        |
+| `AuthToken`      | Reauthenticate a user with a session token                 |
+| `Deauth`         | Deauthenticate a user                                      |
+| `DM`             | Send a private message to a user                           |
+| `Download`       | Download a file from the server                            |
+| `DownloadChunks` | Download a specific series of chunks from a file           |
+| `Explode`        | Tell the other end that we ran out of **packet ID** values |
+| `Heartbeat`      | Tell the other end that this end is alive                  |
+| `InfoChat`       | Request information about a public chat                    |
+| `InfoUser`       | Request information about a user                           |
+| `ManageFriend`   | Manage a friend relationship                               |
+| `Send`           | Send a public message in a chat                            |
+| `Update`         | Send new session information like incoming messages        |
+| `UpdateChat`     | Update a public chat's settings                            |
+| `UpdateUser`     | Update a user's settings                                   |
+| `Upload`         | Upload a file to the server                                |
+| `UploadChunks`   | Upload a specific series of chunks from a file             |
 
 Here the individual packet payloads will be covered.
 
 ### `None`
 
 Sending a packet with this type will not do ***anything***, not even
-update the user activity list like `Heartbeat`.  
-Any payload is *ignored* and the **packet ID** field's *value* of this
-packet doesn't get registered as already used.
+update the user activity list like `Heartbeat`, and any payload will be
+*ignored*.
 
-The only rare case in which this packet would be sent is when responding
-with an acknowledgement or a negative one to another packet without having
-to send a payload.
+The only rare case in which this packet would be sent is when responding with an
+ACK or NACK without a payload. Set the corresponding **respond with ACK** or
+**respond with NACK** flag, set **response ID** to the responded-to packet's nonzero
+**packet ID**.  
+This packet does not itself request an ACK/NACK.
+
+This packet uses the reserved **packet ID** value of `0`.
 
 ### `Auth`
 
@@ -186,7 +205,7 @@ A negative acknowledgement means that the file was not able to be written to dis
 The response only contains an acknowledgement.
 
 If a negative acknowledgement is sent, the sender of the request packet must resend
-again the same packet, also keeping the same **sequence ID**.
+again the same packet, also keeping the same **packet ID**.
 
 ### `Download`
 
@@ -225,7 +244,7 @@ After this packet, chunks will follow.
   may not contain the same amount of data bytes as all the other ones, because the file
   size may not be a multiple of the chosen chunk size
 
-Chunk packets keep the same **sequence ID** field as their parent response packet.
+Chunk packets keep the same **packet ID** field as their parent response packet.
 
 The last chunk packet will expect an acknowledgement signifying that the client was able
 to receive and reconstruct the file contents. If a negative acknowledgement is received,
@@ -244,11 +263,26 @@ file chunks to be transmitted again.
 Again, the last chunk expects an acknowledgement, and if a negative one is sent, this
 whole process repeats.
 
+### `Explode`
+
+The payload is *empty* and this packet expects no acknowledgements.  
+Either endpoint may send this packet when its outgoing allocator has no free nonzero
+**packet ID** values. Before sending it, the sender reports ID exhaustion to its
+higher-level caller and stops starting ordinary sequences.  
+The receiver reports the peer's exhaustion notification to its higher-level caller.  
+`Explode` does not free, reserve, or acknowledge any ordinary packet ID.  
+After notifying the peer, the sender closes the connection and opens a new one before
+starting more sequences.
+
+This packet uses **packet ID** `0` and **response ID** `0`.
+
 ### `Heartbeat`
 
-The payload is empty and this packet expects to acknowledgements.  
+The payload is *empty* and this packet expects no acknowledgements.  
 This packet is used by the server to update the session activity list for each user,
 fundamental for reauthenticating a user with a token.
+
+This packet uses **packet ID** `0` and **response ID** `0`.
 
 ### `InfoChat`
 
@@ -384,7 +418,7 @@ A negative acknowledgement means that the file was not able to be written to dis
 The response only contains an acknowledgement.
 
 If a negative acknowledgement is sent, the sender of the request packet must resend
-again the same packet, also keeping the same **sequence ID**.
+again the same packet, also keeping the same **packet ID**.
 
 ### `Update`
 
@@ -494,7 +528,7 @@ file and then the actual file contents are sent.
   may not contain the same amount of data bytes as all the other ones, because the file
   size may not be a multiple of the chosen chunk size
 
-Chunk packets keep the same **sequence ID** field as their parent request packet.
+Chunk packets keep the same **packet ID** field as their parent request packet.
 
 The last chunk packet will expect an acknowledgement signifying that the server was able
 to receive and reconstruct the file contents. If a negative acknowledgement is received,

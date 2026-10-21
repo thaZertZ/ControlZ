@@ -1,39 +1,26 @@
 
 # Changelog
 
-## Global:
-
-- Removed `cpp-httplib` for now and also removed chat tests
-- Gave better defaults to metadata fields
-- Added `normalize()` methods to all binary format structs
-
 ## `src/headers/Common.hpp`:
 
 - Fixed the `network_byte_order()` overload for `std::string` to
   reverse its bytes instead of switching places every 2 characters
+- Added a hopefully unambiguous overload of `network_byte_order()`
+  to convert the endianness of the elements of an `std::vector`
 
-## `src/headers/Chat.hpp`:
+## `tests/Common.hpp`:
 
-- Overloaded `network_byte_order()` and `network_byte_order_copy()`
-  when needed
-
-## `tests/`:
-
-- Removed chat tests and moved all other tests to this directory
+- Added tests for `network_byte_order()` overloads for `std::string`
+  and `std::vector`
 
 ## `docs/WebSocket.md`:
 
-- Improved the specification
+- Improved the specification (again)
+
+## `docs/SequenceID.md`:
+
+- Specified the behaviour of packet ID tracking
 
 ## `src/headers/WebSocket.hpp`:
 
-- Started implementing the specification with fixed-size packets
-
-## `tests/websocket.cpp`:
-
-- Started testing the implementaton
-
-## `tests/run.bat`:
-
-- Improved the building and analysis logic to report compilation
-  and execution status better
+- Added new packets from the specification like `Heartbeat` and `Explode`

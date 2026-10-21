@@ -5,6 +5,7 @@
 #include <random>
 #include <concepts>
 #include <bit>
+#include <algorithm>
 
 namespace ControlZ {
 
@@ -256,9 +257,30 @@ inline constexpr void network_byte_order(std::string& str) noexcept {
 template <>
 inline constexpr std::string network_byte_order_copy(const std::string& str) noexcept {
     if constexpr (std::endian::native != std::endian::little) return str;
-    std::string result(str.size(), '\0');
+    std::string result = str; // Copy it
     std::reverse(result.begin(), result.end());
     return result;
+}
+
+/// @brief Convert in-place the endianness of the elements of an `std::vector`
+/// @tparam Item The type of the elements in the vector
+/// @param vec The vector
+template <typename Item>
+inline constexpr void network_byte_order(std::vector<Item>& vec) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return;
+    for (auto& x : vec) network_byte_order(x);
+}
+
+/// @brief Return a copy of the passed-in `std::vector` with the endianness of its
+///        elements converted
+/// @tparam Item The type of the elements in the vector
+/// @param vec The vector
+template <typename Item>
+inline constexpr std::vector<Item> network_byte_order_copy(const std::vector<Item>& vec) noexcept {
+    if constexpr (std::endian::native != std::endian::little) return vec;
+    std::vector<Item> self = vec;
+    network_byte_order(self);
+    return self;
 }
 
 

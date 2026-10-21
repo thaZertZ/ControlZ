@@ -8,6 +8,7 @@
 #include <optional>
 #include <array>
 #include <string>
+#include <bitset>
 
 namespace ControlZ {
 
@@ -15,6 +16,31 @@ namespace ControlZ {
 ///        implementations. This namespace contains the data structures
 ///        used by the ControlZ WebSockets subprotocol
 namespace ws {
+
+
+/// @brief A struct holding flags for checking availability of `SequenceID`
+///        values for packets
+struct SequenceIDTracker {
+    /// @brief The flags bitset. For now this is huge, there could be ways of
+    ///        making it smaller while keeping the same functionality
+    std::bitset<65536> flags;
+
+    /// @brief Reset the state of a particular `SequenceID`
+    /// @param i The `SequenceID` to reset the state of
+    inline constexpr void reset(SequenceID i) noexcept {
+        flags[i] = false;
+    }
+
+    /// @brief Mark a particular `SequenceID` as available
+    /// @param i The `SequenceID` to mark as available
+    inline constexpr void set(SequenceID i) noexcept {
+        flags[i] = true;
+    }
+
+    /// @brief Retrieve the flag value for a specific `SequenceID`
+    /// @param i The `SequenceID` to retrieve the flag value of
+    inline constexpr bool at(SequenceID i) noexcept { return flags[i]; }
+};
 
 
 /// @brief A class enum representing the type of a packet
@@ -376,6 +402,56 @@ struct Deauth {
     }
 };
 
+CONTROLZ_MAKE_SCOPED_ENUM (
+    DMVerifyError, // Type name
+    std::uint8_t, // Backing type
+    OK, // Default value
+    OK, // Zero value
+
+    // Enum values
+    OK                  = 0,
+    PayloadSizeMismatch = 1 << 0,
+    ZeroRecipientID     = 1 << 1,
+    EmptyMessageData    = 1 << 2,
+)
+
+struct DM {
+    UserID recipient_id = 0;
+    std::string message;
+
+    static inline constexpr std::expected<DM, DMVerifyError> decode(const std::string& data) noexcept {
+        DM result;
+
+        if (data.size() != sizeof(result))
+            return std::unexpected<DMVerifyError>(DMVerifyError::PayloadSizeMismatch);
+
+        std::memcpy(&result, data.data(), sizeof(result));
+        network_byte_order(result.recipient_id); // Byte order conversion
+        return result;
+    }
+
+    inline constexpr DMVerifyError verify() const noexcept {
+        DMVerifyError errors;
+        if (recipient_id == 0) errors |= DMVerifyError::ZeroRecipientID;
+        if (message.size() == 0) errors |= DMVerifyError::EmptyMessageData;
+
+        return errors;
+    }
+
+    inline constexpr std::expected<std::string, DMVerifyError> encode() const {
+        DMVerifyError errors = this->verify();
+        if (errors) return std::unexpected<DMVerifyError>(errors);
+
+        std::string result(sizeof(recipient_id) + message.size(), '\0');
+
+        UserID swapped = network_byte_order_copy(recipient_id);
+        std::memcpy(result.data(), &swapped, sizeof(swapped));
+        std::memcpy(result.data() + sizeof(swapped), message.data(), message.size());
+
+        return result;
+    }
+};
+
 struct Heartbeat {
     static inline constexpr Heartbeat decode(const std::string& data) noexcept {
         return Heartbeat {};
@@ -385,6 +461,19 @@ struct Heartbeat {
 
     inline constexpr std::string encode() const {
         std::string result(0, '\0'); // The second argument is useless but who cares
+        return result;
+    }
+};
+
+struct Explode {
+    static inline constexpr Explode decode(const std::string& data) noexcept {
+        return Explode {};
+    }
+
+    // No `verify()`
+
+    inline constexpr std::string encode() const {
+        std::string result(0, '\0');
         return result;
     }
 };
