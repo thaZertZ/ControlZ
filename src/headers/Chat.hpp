@@ -137,7 +137,7 @@ template <>
 inline constexpr ChatHeader network_byte_order_copy(const ChatHeader& header) noexcept {
     if constexpr (std::endian::native != std::endian::little) return header;
 
-    ChatHeader result; // We have to do it like this
+    ChatHeader result = header; // We have to do it like this
     network_byte_order(result);
     return result;
 }
@@ -204,11 +204,59 @@ struct ChatFile {
         std::memcpy(ptr, members.data(), header.members_len * sizeof(UserID));
         ptr += header.members_len * sizeof(UserID);
 
-        // Only if they both have a value
         if (pswd_data)
             std::memcpy(ptr, pswd_data->data(), 64);
 
         return result;
+    }
+
+    static inline constexpr std::optional<ChatFile> from_bytes(const std::string& str) {
+        ChatFile result;
+        if (str.size() <
+            sizeof(result.header) + 1 // This is the minimum name length
+            + sizeof(UserID) // It must have at least one member
+        ) return std::nullopt; // Return this to signal that the length is invalid
+
+        const char* ptr = str.data(); // Pointer to the string
+        std::memcpy(&result.header, ptr, sizeof(result.header));
+        ptr += sizeof(result.header);
+
+        // Get metadata so we know if to decode other elements
+        ChatHeaderMetadata meta = ChatHeaderMetadata::from_metadata(result.header.metadata);
+
+        // Perform a second check now that we can calculate the total size
+        if (str.size() !=
+            sizeof(result.header)
+            + (meta.name_flag ? result.header.name_len : 0)
+            + (meta.desc_flag ? result.header.desc_len : 0)
+            + (meta.members_flag ? result.header.members_len : 0)
+            + (meta.requires_password ? 64 : 0)
+        ) return std::nullopt;
+
+        if (meta.name_flag) {
+            result.name.resize(result.header.name_len);
+            std::memcpy(result.name.data(), ptr, result.header.name_len);
+            ptr += result.header.name_len;
+        }
+
+        if (meta.desc_flag) {
+            result.description.resize(result.header.desc_len, '\0');
+            std::memcpy(result.description.data(), ptr, result.header.desc_len);
+            ptr += result.header.desc_len;
+        }
+
+        if (meta.members_flag) {
+            result.members.resize(result.header.members_len, 0);
+            std::memcpy(result.members.data(), ptr, result.header.members_len * sizeof(UserID));
+            ptr += result.header.members_len * sizeof(UserID);
+        }
+
+        if (meta.requires_password) {
+            result.pswd_data = std::make_optional<std::array<char, 64>>({0});
+            std::memcpy(result.pswd_data->data(), ptr, 64);
+        }
+
+        return std::make_optional<ChatFile>(result); // Should `result` be moved into the function call?
     }
 
     inline constexpr bool operator==(const ChatFile& other) const noexcept {
@@ -295,16 +343,16 @@ CONTROLZ_MAKE_SCOPED_ENUM (
     OK, // Zero value
 
     // Enum values
-    OK                 = 0,
-    FileDoesNotExist   = 1 << 0,
-    InvalidExtension   = 1 << 1,
-    InvalidMagic       = 1 << 2,
-    InvalidVersion     = 1 << 3,
-    InvalidChatID      = 1 << 4,
-    NoSpaceForPswdData = 1 << 5,
-    FileFatal          = 1 << 6,
-    FileNonFatal       = 1 << 7,
-    Exception          = 1 << 8
+    OK               = 0,
+    FileDoesNotExist = 1 << 0,
+    InvalidExtension = 1 << 1,
+    InvalidMagic     = 1 << 2,
+    InvalidVersion   = 1 << 3,
+    InvalidChatID    = 1 << 4,
+    InvalidFileSize  = 1 << 5,
+    FileFatal        = 1 << 6,
+    FileNonFatal     = 1 << 7,
+    Exception        = 1 << 8
 )
 
 /// @brief Deserialize the contents of a chat file
@@ -331,8 +379,12 @@ std::expected<ChatFile, DeserializeChatFileError> deserialize_chat_file(const st
 
         file.seekg(0, std::ios::beg);
 
-        ChatFile result;
-        file.read(reinterpret_cast<char*>(&result.header), sizeof(result.header));
+        std::string data(filesize, '\0');
+        file.read(data.data(), filesize); // Read all at once
+
+        std::optional<ChatFile> opt = ChatFile::from_bytes(data);
+        if (!opt.has_value()) return std::unexpected<DeserializeChatFileError>(DeserializeChatFileError::InvalidFileSize);
+        ChatFile result = opt.value(); // We can safely access it now
 
         ChatHeaderVerifyError status = result.header.verify();
         if (status & ChatHeaderVerifyError::InvalidMagic) errors |= DeserializeChatFileError::InvalidMagic;
@@ -340,24 +392,6 @@ std::expected<ChatFile, DeserializeChatFileError> deserialize_chat_file(const st
         if (status & ChatHeaderVerifyError::InvalidChatID) errors |= DeserializeChatFileError::InvalidChatID;
 
         if (errors) return std::unexpected<DeserializeChatFileError>(errors);
-
-        result.name.resize(result.header.name_len, '\0');
-        result.description.resize(result.header.desc_len, '\0');
-        result.members.resize(result.header.members_len, 0);
-
-        file.read(result.name.data(), result.header.name_len);
-        file.read(result.description.data(), result.header.desc_len);
-        // Don't forget the size
-        file.read(reinterpret_cast<char*>(result.members.data()), result.header.members_len * sizeof(UserID));
-
-        // We have the optional data if we say it in the header
-        if (ChatHeaderMetadata::from_metadata(result.header.metadata).requires_password) {
-            //auto a = file.tellg();
-            if (filesize - file.tellg() != 64) // But check first for enough space
-                return std::unexpected<DeserializeChatFileError>(DeserializeChatFileError::NoSpaceForPswdData);
-            result.pswd_data = std::make_optional<std::array<char, 64>>({0}); // Fill with zeroes
-            file.read(result.pswd_data->data(), 64);
-        }
 
         return result;
 

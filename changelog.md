@@ -1,26 +1,22 @@
 
 # Changelog
 
-## `src/headers/Common.hpp`:
-
-- Fixed the `network_byte_order()` overload for `std::string` to
-  reverse its bytes instead of switching places every 2 characters
-- Added a hopefully unambiguous overload of `network_byte_order()`
-  to convert the endianness of the elements of an `std::vector`
-
-## `tests/Common.hpp`:
-
-- Added tests for `network_byte_order()` overloads for `std::string`
-  and `std::vector`
-
 ## `docs/WebSocket.md`:
 
-- Improved the specification (again)
-
-## `docs/SequenceID.md`:
-
-- Specified the behaviour of packet ID tracking
+- Added a new `GetFilename` packet type that is used to
+  retrieve the attachment mapping of a file
 
 ## `src/headers/WebSocket.hpp`:
 
-- Added new packets from the specification like `Heartbeat` and `Explode`
+- Implemented `GetFilename` and its response
+
+## `src/headers/Chat.hpp`:
+
+- Added a binary deserializaton factory function to `ChatFile`
+  and used it in the `deserialize_chat_file()` function
+
+## `src/headers/Envelope.hpp`:
+
+- Updated length encoding helpers to be easier to understand
+- Added a binary deserialization factory function to
+  `DMsMessageReplies` and `DMsMessage`

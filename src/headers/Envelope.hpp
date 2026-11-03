@@ -75,19 +75,19 @@ struct DMsMessageMetadata {
         };
     }
 
-    /// @brief Return a length value encoded with a provided length encoding
-    /// @param length The value to encode
+    /// @brief Decode a length value encoded with a provided length encoding
+    /// @param length The value to decode
     /// @param length_encoding The specified encoding
-    static inline constexpr std::uint16_t encoded_length(std::uint16_t length, bool length_encoding) noexcept {
+    static inline constexpr std::uint16_t decode_length(std::uint16_t length, bool length_encoding) noexcept {
         return length * (
             length_encoding ? 8 : 4
         );
     }
 
-    /// @brief Return a length value decoded with a provided length encoding
-    /// @param length The value to decode
+    /// @brief Encode a length value decoded with a provided length encoding
+    /// @param length The value to encode
     /// @param length_encoding The specified encoding
-    static inline constexpr std::uint16_t decoded_length(std::uint16_t length, bool length_encoding) noexcept {
+    static inline constexpr std::uint16_t encode_length(std::uint16_t length, bool length_encoding) noexcept {
         return (
             length_encoding        ? // Which length encoding?
             ((length + 7) / 8) * 8 : // Long encoding
@@ -172,16 +172,13 @@ struct DMsMessageReplies {
 
     /// @brief Construct an object specifying the number of timestamps to allocate
     /// @param count The number of timestamps
-    DMsMessageReplies(std::uint8_t count) : padding_null_byte(0) {
-        reply_count = count == 0 ? 0 : count - 1;
-        timestamps.resize(reply_count, 0);
-    }
+    DMsMessageReplies(std::uint8_t count)
+        : reply_count(count == 0 ? 0 : count - 1), padding_null_byte(0), timestamps(reply_count, 0) {}
 
     /// @brief Construct an object specifying a list of timestamps to allocate
     /// @param list The list of timestamps
-    DMsMessageReplies(const std::vector<Timestamp>& list) : padding_null_byte(0), timestamps(list) {
-        reply_count = list.empty() ? 0 : list.size() - 1;
-    }
+    DMsMessageReplies(const std::vector<Timestamp>& list)
+        : reply_count(list.empty() ? 0 : list.size() - 1), padding_null_byte(0), timestamps(list) {}
 
     /// @brief Return `true` if there are allocated timestamps. Note that the
     ///        `reply_count` member will always encode a non-zero value, but the
@@ -194,12 +191,13 @@ struct DMsMessageReplies {
     inline constexpr std::size_t size() const noexcept {
         return 2 + (timestamps.empty() ?
             1 : // We need at least a value
-            reply_count + 1 // Biased encoding
+            timestamps.size() // The value of reply_count should be biased
         ) * sizeof(Timestamp);
     }
 
     /// @brief Fix this object's invariants according to what is specified by the format
     inline constexpr void normalize() noexcept {
+        *const_cast<std::uint8_t*>(&padding_null_byte) = 0; // Gross
         // Correct any mismatch in data (assuming that the timestamps vector is not empty else add a 0 element)
         if (timestamps.empty()) timestamps.push_back(0);
         reply_count = timestamps.size() - 1;
@@ -217,6 +215,23 @@ struct DMsMessageReplies {
         std::memcpy(result.data() + 2, timestamps.data(), timestamps.size() * sizeof(Timestamp));
 
         return result;
+    }
+
+    static inline constexpr std::optional<DMsMessageReplies> from_bytes(const std::string& str) noexcept {
+        DMsMessageReplies result(0); // Make it empty for now
+        if (str.size() < sizeof(std::uint8_t) * 2) return std::nullopt;
+
+        const char* ptr = str.data();
+        std::memcpy(&result.reply_count, ptr, sizeof(result.reply_count));
+        ptr += result.reply_count + sizeof(result.padding_null_byte); // Let's ignore the padding byte
+
+        // Second check
+        if (str.size() != sizeof(std::uint8_t) * 2 + result.reply_count) return std::nullopt;
+
+        // The timestamps were already resized when constructing the result object
+        std::memcpy(result.timestamps.data(), ptr, result.reply_count * sizeof(Timestamp));
+
+        return std::make_optional<DMsMessageReplies>(result); // Should `result` be moved into the call?
     }
 
     inline constexpr bool operator==(const DMsMessageReplies& other) const noexcept {
@@ -399,6 +414,46 @@ struct DMsMessage {
             std::memcpy(ptr, payload->data.data(), payload->data.size());
 
         return output;
+    }
+
+    static inline constexpr std::optional<DMsMessage> from_bytes(const std::string& str) noexcept {
+        DMsMessage result;
+        // We know for sure that there must be the header, plus some extra data we don't know about yet
+        if (str.size() <= sizeof(result.header)) return std::nullopt;
+
+        const char* ptr = str.data(); // Tracking pointer
+        std::memcpy(&result.header, ptr, sizeof(result.header)); // Copy the header
+
+        DMsMessageMetadata meta = DMsMessageMetadata::from_metadata(result.header.metadata);
+
+        if (meta.reply) {
+            std::uint8_t count = 0;
+            std::memcpy(&count, ptr, sizeof(count)); // We don't increment ptr to then read the whole structure
+            if (ptr - str.data() + 2 + count * sizeof(Timestamp) >= str.size()) return std::nullopt; // We can't go on anymore
+
+            // Start the substring at the index at which ptr points to, and have a length of 2 + the coded reply count
+            result.replies.emplace(*DMsMessageReplies::from_bytes(str.substr(ptr - str.data(), 2 + sizeof(Timestamp) * (count == 0 ? 1 : count))));
+            ptr += result.replies->size();
+        }
+        if (meta.attachment_count != 0) {
+            // Check again if we can continue
+            if (ptr - str.data() + meta.attachment_count * sizeof(DMsMessageAttachment) >= str.size()) return std::nullopt;
+
+            result.attachments.emplace(meta.attachment_count, DMsMessageAttachment {}); // Construct the vector and resize it
+            std::memcpy(result.attachments->data(), ptr, meta.attachment_count * sizeof(DMsMessageAttachment));
+            ptr += meta.attachment_count * sizeof(DMsMessageAttachment); // Increment our pointer
+        }
+        if (meta.length != 0) {
+            // First, decode the length we expect to be read
+            std::uint16_t length = DMsMessageMetadata::decode_length(meta.length, meta.length_encoding);
+            // Check if we have a too long or too short buffer
+            if (ptr - str.data() + length != str.size()) return std::nullopt;
+
+            result.payload.emplace(std::string(length, '\0')); // Construct and resize the string
+            std::memcpy(result.payload->data.data(), ptr, length); // Copy character data
+        }
+
+        return std::make_optional<DMsMessage>(result); // Should `result` be moved into the call?
     }
 
     inline constexpr bool operator==(const DMsMessage& other) const noexcept {

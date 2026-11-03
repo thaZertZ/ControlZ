@@ -106,6 +106,7 @@ connection, which resets that connection's ID state.
 | `Download`       | Download a file from the server                            |
 | `DownloadChunks` | Download a specific series of chunks from a file           |
 | `Explode`        | Tell the other end that we ran out of **packet ID** values |
+| `GetFilename`    | Ask the server the name of a file via its `AttachmentID`   |
 | `Heartbeat`      | Tell the other end that this end is alive                  |
 | `InfoChat`       | Request information about a public chat                    |
 | `InfoUser`       | Request information about a user                           |
@@ -275,6 +276,26 @@ After notifying the peer, the sender closes the connection and opens a new one b
 starting more sequences.
 
 This packet uses **packet ID** `0` and **response ID** `0`.
+
+### `GetFilename`
+
+```
+0-3  :  AttachmentID
+```
+
+- **AttachmentID**: the `AttachmentID` of the file to retrieve the original name of
+
+This packet expects a response, if a negative acknowledgement is received, it means
+that the `AttachmentID` was invalid or the server was not able to retrieve the filename
+due to I/O errors.
+
+#### Response
+
+```
+---  :  Filename
+```
+
+- **Filename**: the raw character data of the filename
 
 ### `Heartbeat`
 

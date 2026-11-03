@@ -52,6 +52,8 @@ enum class PacketType : std::uint8_t {
     DM, // Send a private message to a user
     Download, // Download a file from the server
     DownloadChunks, // Download a specific series of chunks from a file
+    Explode, // Tell the other end that we ran out of PacketID values
+    GetFilename, // Ask the server the name of a file via its AttachmentID
     Heartbeat, // Tell the other end that this end is alive
     InfoChat, // Request information about a public chat
     InfoUser, // Request information about a user
@@ -416,7 +418,11 @@ CONTROLZ_MAKE_SCOPED_ENUM (
 )
 
 struct DM {
+    /// @brief The `UserID` of the recipient
     UserID recipient_id = 0;
+    /// @brief Raw `DMsMessage` serialized data. The encoded
+    ///        data's contents' endianness is expected to be
+    ///        converted to big-endian before encoding
     std::string message;
 
     static inline constexpr std::expected<DM, DMVerifyError> decode(const std::string& data) noexcept {
@@ -452,19 +458,6 @@ struct DM {
     }
 };
 
-struct Heartbeat {
-    static inline constexpr Heartbeat decode(const std::string& data) noexcept {
-        return Heartbeat {};
-    }
-
-    // No `verify()`
-
-    inline constexpr std::string encode() const {
-        std::string result(0, '\0'); // The second argument is useless but who cares
-        return result;
-    }
-};
-
 struct Explode {
     static inline constexpr Explode decode(const std::string& data) noexcept {
         return Explode {};
@@ -474,6 +467,54 @@ struct Explode {
 
     inline constexpr std::string encode() const {
         std::string result(0, '\0');
+        return result;
+    }
+};
+
+struct GetFilename {
+    AttachmentID attachment_id = 0;
+
+    static inline constexpr std::expected<GetFilename, PacketVerifyError> decode(const std::string& data) noexcept {
+        GetFilename result;
+
+        if (data.size() != sizeof(result.attachment_id))
+            return std::unexpected<PacketVerifyError>(PacketVerifyError::PayloadSizeMismatch);
+
+        std::memcpy(&result.attachment_id, data.data(), sizeof(result.attachment_id));
+    }
+
+    // No `verify()`
+
+    inline constexpr std::string encode() const {
+        std::string result(sizeof(attachment_id), '\0');
+        std::memcpy(result.data(), &attachment_id, sizeof(attachment_id));
+        return result;
+    }
+};
+
+struct GetFilenameResponse {
+    std::string filename;
+
+    static inline constexpr GetFilenameResponse decode(const std::string& data) noexcept {
+        return { .filename = data }; // Easiest decode function ever
+    }
+
+    // No `verify()`
+
+    inline constexpr std::string encode() const {
+        return filename; // Simples encode function ever
+    }
+};
+
+struct Heartbeat {
+    static inline constexpr Heartbeat decode(const std::string& data) noexcept {
+        return Heartbeat {};
+    }
+
+    // No `verify()`
+
+    inline constexpr std::string encode() const {
+        std::string result(0, '\0'); // The second argument is useless but who cares
         return result;
     }
 };

@@ -25,7 +25,7 @@ int main() {
         REQUIRE(decoded.reply);
         REQUIRE(decoded.length_encoding == long_encoding);
         // The last 2 cases would break
-        REQUIRE(decoded.length == DMsMessageMetadata::decoded_length(length, long_encoding));
+        REQUIRE(decoded.length == DMsMessageMetadata::encode_length(length, long_encoding));
     }
 
     DMsMessageHeader native_header {
