@@ -16,8 +16,8 @@ using UserID = std::uint16_t;
 using ChatID = std::uint32_t;
 /// @brief Alias for a custom timestamp in seconds (32bit unsigned integer)
 using Timestamp = std::uint32_t;
-/// @brief Alias for an `AttachmentID` (16bit unsigned integer)
-using AttachmentID = std::uint16_t;
+/// @brief Alias for an `AttachmentID` (32bit unsigned integer)
+using AttachmentID = std::uint32_t;
 /// @brief Alias for a `SequenceID` (16bit unsigned integer)
 using SequenceID = std::uint16_t;
 /// @brief Alias for a `SessionToken` (16byte `char` array)
@@ -193,6 +193,144 @@ enum class FileExtension : std::uint16_t {
     GSLIDES, // Google Slides presentation
 
     // H ---------------------------------------
+    Hexcl /* written as H! */, // Online help file or pertext database
+    Hminmin /* written as H-- */, // C-- header file
+    H, // C header file
+    HA, // Archive
+    HACK, // Hack language source
+    HAR, // HTTP Archive format
+    //HDF and HDF5
+    HDI, // Hard Disk Image file
+    HDMP, // Heap Dump file
+    HEIC, // HEIF raster image
+    HEIF, // HEIF raster image
+    HH, // C++ header file
+    HPP, // C++ header file
+    HTA, // HTML Application
+    HTM, // HTML source
+    HTML, // HTML source
+    HXX, // C++ header file
+
+    // I ---------------------------------------
+    ICL, // Windows Icon Library
+    ICNS, // Macintosh icons
+    ICO, // Icon file
+    ICS, // iCalendar format
+    IMG, // Disk Image
+    INFO, // Textinfo document
+    INI, // INI Configuration file
+    IO, // Archive
+    IOS, // GameMaker project code
+    ISO, // Optical disk media ISO-standardized filesystem
+
+    // J ---------------------------------------
+    JL, // Julia language source
+    JAR, // Java archive
+    JAV, // Java language source
+    JAVA, // Java language source
+    JPE, // Same as JPEG
+    JPEG, // Joint Photographic Experts Group
+    JPG, // Same as JPEG
+    JS, // JavaScript language source
+    JSON, // JSON source
+
+    // K ---------------------------------------
+    KEY, // Keynote presentation
+    KO, // Linux kernel module format system file
+    KRA, // Krita project file
+    KRABER, // Kraber language source
+    KSH, // Kornshell source
+    KT, // Kotlin language source
+
+    // L ---------------------------------------
+    LATEX, // LaTeX source
+    LDB, // Microsoft Access Database
+    LISP, // Lisp language source
+    LL, // LLVM assembly
+    LM, // Language Model file
+    LNK, // Windows local file shortcut
+    LOGICX, // Logic Pro project file
+    LRC, // Lyrics file
+    LUA, // Lua language source
+    LZ, // Archive
+
+    // M ---------------------------------------
+    M, // Objective-C language source
+    M4A, // MPEG-4 Part 14 audio
+    M4R, // Same as M4A
+    MAT, // Matlab language source
+    MBOX, // Email mailbox archive
+    MCADDON, // Minecraft addon
+    MCMETA, // Minecraft resource pack configuration file
+    MCFUNCTION, // Minecraft datapack command script
+    MCPACK, // Minecraft resource pack
+    MCPROJECT, // Minecraft Bedrock Editor file
+    MCSTRUCTURE, // Minecraft structure
+    MCTEMPLATE, // Mincraft world template
+    MCWORLD, // Minecraft world
+    MD, // Markdown source
+    MDB, // Microsoft Access Database
+    MDF, // Microsoft SQL Server Master Data File
+    MDL, // Model
+    MDMP, // Microsoft Minidump file
+    MEX, // Matlab executable command
+    MHT, // MIME encapsulation of aggregate HTML files
+    MID, // MIDI file
+    MKA, // Matroska Audio
+    MKV, // Matroska Video
+    MLX, // Matlab live script file
+    MM, // Objective-C++ language source
+    MML, // MathML source
+    MOBI, // eBook
+    MOD, // Modula language source
+    MODULES, // GTK+ module file
+    MOV, // Movie video file
+    MP2, // MPEG-2 audio file
+    MP3, // MPEG-3 audio file
+    MP4, // MPEG-4 video file
+    MPA, // MPEG audio stream
+    MPEG, // MPEG media
+    MPG, // MPEG media
+    MSC, // Management Saved Console
+    MSI, // Windows Installer package
+    MSO, // Microsoft Outlook metadata file
+    MSSTYLES, // Windows visual style file
+    MSU, // Microsoft Update package
+
+    // N ---------------------------------------
+    NC, // Binary data
+    NFO, // Info file
+    NIM, // Nim language source
+    NRO, // Nintendo Switch executable file
+
+    // O ---------------------------------------
+    O, // Object file
+    OBJ, // Object code
+    ODB, // OpenDocument Database
+    ODF, // OpenDocument Formula
+    ODG, // OpenDocument Graphics
+    ODP, // OpenDocument Presentation
+    ODS, // OpenDocument Spreadsheet
+    ODT, // OpenDocument Text
+    OGA, // Ogg audio
+    OGG, // Vorbis audio
+    OGV, // Ogg video
+    OPUS, // Opus audio
+    ORG, // Emacs ORG mode
+    OSB, // Osu! storyboard
+    OSK, // Osu! skin
+    OSR, // Osu! replay
+    OST, // Offline Storage Table
+    OSU, // Osu! beatmap info
+    OSZ, // Osu! beatmap
+    OTF, // Open-Type Font or OpenDocument Formula Template
+    OTG, // OpenDocument Graphics Template
+    OTP, // OpenDocument Presentation Template
+    OTS, // OpenDocument Spreadsheet Template
+    OTT, // OpenDocument Text Template
+    OXT, // OpenOffice or LibreOffice Extension
+
+    // P ---------------------------------------
     
 };
 
@@ -226,7 +364,7 @@ inline constexpr Type network_byte_order_copy(const Type&) noexcept;
 template <std::integral Type>
 inline constexpr void network_byte_order(Type& value) noexcept {
     if constexpr (std::endian::native == std::endian::little)
-        value = std::byteswap(value); // Maybe `std::move()` this?
+        value = std::byteswap(value);
 }
 
 /// @brief Return a value with the converted endianness of another value
@@ -234,11 +372,35 @@ inline constexpr void network_byte_order(Type& value) noexcept {
 /// @tparam Type The type of the value
 /// @param value The value to convert
 template <std::integral Type>
-inline constexpr Type network_byte_order_copy(const Type& value) noexcept {
+inline constexpr Type network_byte_order_copy(Type value) noexcept {
     if constexpr (std::endian::native == std::endian::little)
         return std::byteswap(value);
     else
         return value; // Return something anyways
+}
+
+/// @brief Convert in-place the endianness of an enum if the host is
+///        little endian
+/// @tparam Type The type of the enum
+/// @param value The value to convert
+template <typename Type>
+requires (std::is_enum_v<Type>)
+inline constexpr void network_byte_order(Type& value) noexcept {
+    if constexpr (std::endian::native == std::endian::little)
+        value = static_cast<Type>(std::byteswap(std::to_underlying(value)));
+}
+
+/// @brief Return a value with the converted endianness of another value
+///        of an enum type if the host is little endian
+/// @tparam Type The type of the enum
+/// @param value The value to convert
+template <typename Type>
+requires (std::is_enum_v<Type>)
+inline constexpr Type network_byte_order_copy(Type value) noexcept {
+    if constexpr (std::endian::native == std::endian::little)
+        return static_cast<Type>(std::byteswap(std::to_underlying(value)));
+    else
+        return value;
 }
 
 /// @brief Convert in-place the endianness of an `std::string`'s bytes
@@ -281,6 +443,13 @@ inline constexpr std::vector<Item> network_byte_order_copy(const std::vector<Ite
     std::vector<Item> self = vec;
     network_byte_order(self);
     return self;
+}
+
+template <std::integral Item>
+inline constexpr void unique_sorted_vec(std::vector<Item>& vec) {
+    std::sort(vec.begin(), vec.end()); // Sort elements
+    auto end = std::unique(vec.begin(), vec.end()); // Get the new vector end
+    vec.erase(end, vec.end()); // Erase all elements past it
 }
 
 

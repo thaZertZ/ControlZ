@@ -456,6 +456,10 @@ struct DMsMessage {
         return std::make_optional<DMsMessage>(result); // Should `result` be moved into the call?
     }
 
+    static inline constexpr std::vector<DMsMessage> from_many(const std::string& str) noexcept {
+        // Implement this here, what do we do when we stop due to an `std::nullopt`?
+    }
+
     inline constexpr bool operator==(const DMsMessage& other) const noexcept {
         return header == other.header &&
             ((replies.has_value() && other.replies.has_value()) ?
