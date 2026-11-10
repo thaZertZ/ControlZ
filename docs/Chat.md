@@ -41,7 +41,7 @@ After this header, a variadic data section follows:
 - **Argon2id password salt**: the salt value used in the Argon2id hashing algorithm
   for the password
 - **Argon2id password hash**: the password hashed with Argon2id. This and the
-  previous fields are optional
+  previous field are optional
 
 This is the structure of the **metadata bitmask** field:
 

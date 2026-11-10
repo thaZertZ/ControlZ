@@ -262,7 +262,8 @@ file chunks to be transmitted again.
   that the server must resend with a `Download` *chunk* packet
 
 Again, the last chunk expects an acknowledgement, and if a negative one is sent, this
-whole process repeats.
+whole process repeats once more. If the last attempt fails, the client should
+signal the failure to the user.
 
 ### `Explode`
 
@@ -329,13 +330,29 @@ The negative acknowledgement means that the **ChatID** field was invalid.
 ```
 
 - **Policy bitmask**: a bitmask containing information about which fields are
-  allowed to be read. The ones that aren't will hold a value of `0`
+  present in the packet. The ones that aren't will hold a value of `0`
 - **Name length**: the length in bytes of the **name** field
 - **Description length**: the length in bytes of the **description** field
 - **Name**: the raw characters of the chat's name. Can be at most 40 characters
 - **Description**: the raw characters of the chat's description. Can be at most
   4000 characters
 - **Members list**: the list of members inside the chat
+
+The **policy bitmask** field is layed out as follows:
+
+```
+7 6 5 4 3 2 1 0
+---------------
+x x x x x m d n
+
+n  :  Name
+d  :  Description
+m  :  Members list
+x  :  Reserved for future use
+```
+
+All bits set to `1` signal that their associated field is present in the variadic
+section of the packet, otherwise it is not.
 
 ### `InfoUser`
 
@@ -391,9 +408,9 @@ x  :  Reserved for future use
   binary file format, found [here](./User.md#format-header)
 - **Friend request policy**: mirrors the **friend request policy** field of the user
   binary file format
-- **Username flag**: whether the user can read the requested username
-- **Bio flag**: whether the user can read the requested bio
-- **Friends list flag**: whether the user can read the requested friends list
+- **Username flag**: whether the packet holds the username
+- **Bio flag**: whether the packet holds the bio
+- **Friends list flag**: whether the packet holds the friends list
 
 ### `ManageFriend`
 
@@ -447,14 +464,25 @@ again the same packet, also keeping the same **packet ID**.
 0-1  :  DMs count
 2-3  :  Friend requests count
 4-5  :  New messages count
+6-7  :  DMs size
+---  :  DMs pointers
+---  :  Message pointers
 ---  :  DMs data
 ---  :  Friend request data
 ---  :  Message data
 ```
 
-- **DMs count**: the number of new DMs
+- **DMs count**: the number of *chunks* of new DMs
 - **Friend requests count**: the number of new friend request data
 - **New messages count**: the number of *chunks* of new messages in public chats
+- **DMs size**: the size in bytes of the **DMs data** field
+- **DMs pointers**: a variadic list of 32bit unsigned byte addresses pointing to the
+  different messages in the **DMs data** section. There are as many as **DMs count**
+  specifies. The addresses start from the first byte of the **DMs data** field
+- **DMs pointers**: a variadic list of 32bit unsigned byte addresses pointing to the
+  different messages in the **Messages data** section. There are as many as
+  **Messages count** specifies. The addresses start from the first byte of the
+  **Message data** field
 - **DMs data**: a variadic number of serialized `DMsMessage` objects from different users.
   DMs from the same user are guaranteed to be on after the other, but not necessarily in
   chronological order or sorted among the different `UserID`s
@@ -472,9 +500,8 @@ The **friend request data** is defined like this:
 ```
 
 - **Target UserID**: the `UserID` of the user to which this action relates
-- **Action**: can be `0` if the target user accepted a previously sent friend request,
-  it can be `1` if the target user sent a friend request to the user receiving this
-  packet, or it can be `2` if the target user removed this user as a friend
+- **Action**: mirrors the **action** field of a `ManageFriend` packet, but making the value
+  `0` illegal
 
 The **message data** is divided in chunks like this:
 
@@ -491,9 +518,11 @@ The **message data** is divided in chunks like this:
 ### `UpdateChat`
 
 ```
+0-3  :  ChatID
 ---  :  Raw ChatFile data
 ```
 
+- **ChatID**: the `ChatID` of the chat to update the settings of
 - **Raw ChatFile data**: raw binary data from a serialized `ChatFile` object
 
 This packet expects an acknowledgement, if a negative acknowledgement is received,
@@ -566,4 +595,5 @@ file chunks to be transmitted again.
   that the client must resend with a `Download` *chunk* packet
 
 Again, the last chunk expects an acknowledgement, and if a negative one is sent, this
-whole process repeats.
+whole process repeats once more. If the last attempt fails, the client should
+signal the failure to the user.

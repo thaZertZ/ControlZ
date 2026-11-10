@@ -13,7 +13,7 @@
 
 ## `src/headers/WebSocket.hpp`:
 
-- Finish implementing all packet types with the same API
+- Test packets and add state tracking data structures, also with rigorous testing
 
 ## `docs/WebSocket.md`:
 
